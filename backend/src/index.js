@@ -10,6 +10,7 @@ const authRoutes = require('./routes/auth.routes')
 const adminRoutes = require('./routes/admin.routes')
 const restaurantRoutes = require('./routes/restaurant.routes')
 const menuRoutes = require('./routes/menu.routes')
+const aiRoutes = require('./routes/ai.routes')
 
 const app = express()
 
@@ -24,7 +25,7 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3001')
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3002')
   .split(',')
   .map((o) => o.trim())
 
@@ -59,6 +60,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/restaurant', restaurantRoutes)
 app.use('/api/menu', menuRoutes)
+app.use('/api/ai', aiRoutes)
 
 // ─── Health check ────────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
