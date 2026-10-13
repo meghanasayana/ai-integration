@@ -82,6 +82,16 @@ ${userPrompt}
           price: true,
           isAvailable: true,
           isVeg: true,
+
+          portions: {
+            select: {
+              id: true,
+              portion: true,
+              price: true,
+              isAvailable: true,
+            },
+          },
+
           category: {
             select: {
               id: true,

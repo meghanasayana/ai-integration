@@ -37,25 +37,25 @@ model User {
 }
 
 model Restaurant {
-  id            String           @id @default(cuid())
-  name          String
-  slug          String           @unique
-  description   String?
-  cuisineType   String?          @map("cuisine_type")
-  logoUrl       String?          @map("logo_url")
-  address       String?
-  phone         String?
-  status        RestaurantStatus @default(active)
-  customMenuUrl String?          @map("custom_menu_url")
-  googleReviewUrl String?        @map("google_review_url")
-  feedbackUrl           String?  @map("feedback_url")
-  superAdminFeedbackUrl String?  @map("super_admin_feedback_url")
-  overrideFeedbackUrl   Boolean  @default(false) @map("override_feedback_url")
-  adminUsers    User[]
-  categories    Category[]
-  foodItems     FoodItem[]
-  analytics     AnalyticsEvent[]
-  createdAt     DateTime         @default(now()) @map("created_at")
+  id                    String           @id @default(cuid())
+  name                  String
+  slug                  String           @unique
+  description           String?
+  cuisineType           String?          @map("cuisine_type")
+  logoUrl               String?          @map("logo_url")
+  address               String?
+  phone                 String?
+  status                RestaurantStatus @default(active)
+  customMenuUrl         String?          @map("custom_menu_url")
+  googleReviewUrl       String?          @map("google_review_url")
+  feedbackUrl           String?          @map("feedback_url")
+  superAdminFeedbackUrl String?          @map("super_admin_feedback_url")
+  overrideFeedbackUrl   Boolean          @default(false) @map("override_feedback_url")
+  adminUsers            User[]
+  categories            Category[]
+  foodItems             FoodItem[]
+  analytics             AnalyticsEvent[]
+  createdAt             DateTime         @default(now()) @map("created_at")
 
   @@map("restaurants")
 }
@@ -73,34 +73,51 @@ model Category {
 }
 
 model FoodItem {
-  id           String           @id @default(cuid())
-  restaurantId String           @map("restaurant_id")
-  restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  categoryId   String?          @map("category_id")
-  category     Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  name         String
-  price        Decimal          @db.Decimal(10, 2)
-  imageUrl        String?          @map("image_url")
-  topViewImageUrl String?          @map("top_view_image_url")
-  isVeg           Boolean          @default(false) @map("is_veg")
-  description  String?
-  ingredients  String?
-  spices       String?
-  allergens    String?
-  portionSize  String?          @map("portion_size")
-  prepTime     String?          @map("prep_time")
-  calories     Int?
-  isJain       Boolean          @default(false) @map("is_jain")
-  isVegan      Boolean          @default(false) @map("is_vegan")
-  isGlutenFree Boolean          @default(false) @map("is_gluten_free")
-  spicyLevel   Int              @default(0) @map("spicy_level")
-  specialTags  String?          @map("special_tags")
-  isAvailable  Boolean          @default(true) @map("is_available")
-  sortOrder    Int              @default(0) @map("sort_order")
-  analytics    AnalyticsEvent[]
-  createdAt    DateTime         @default(now()) @map("created_at")
+  id              String            @id @default(cuid())
+  restaurantId    String            @map("restaurant_id")
+  restaurant      Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  categoryId      String?           @map("category_id")
+  category        Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name            String
+  price           Decimal           @db.Decimal(10, 2)
+  imageUrl        String?           @map("image_url")
+  topViewImageUrl String?           @map("top_view_image_url")
+  isVeg           Boolean           @default(false) @map("is_veg")
+  description     String?
+  ingredients     String?
+  spices          String?
+  allergens       String?
+  portionSize     String?           @map("portion_size")
+  prepTime        String?           @map("prep_time")
+  calories        Int?
+  isJain          Boolean           @default(false) @map("is_jain")
+  isVegan         Boolean           @default(false) @map("is_vegan")
+  isGlutenFree    Boolean           @default(false) @map("is_gluten_free")
+  spicyLevel      Int               @default(0) @map("spicy_level")
+  specialTags     String?           @map("special_tags")
+  isAvailable     Boolean           @default(true) @map("is_available")
+  sortOrder       Int               @default(0) @map("sort_order")
+  analytics       AnalyticsEvent[]
+  portions        FoodItemPortion[]
+  createdAt       DateTime          @default(now()) @map("created_at")
 
   @@map("food_items")
+}
+
+model FoodItemPortion {
+  id          String  @id @default(cuid())
+  foodItemId  String  @map("food_item_id")
+  portion     String
+  price       Decimal @db.Decimal(10, 2)
+  isAvailable Boolean @default(true) @map("is_available")
+
+  foodItem FoodItem @relation(fields: [foodItemId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([foodItemId, portion])
+  @@map("food_item_portions")
 }
 
 model AnalyticsEvent {

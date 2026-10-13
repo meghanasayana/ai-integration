@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { Plus, Pencil, Trash2, UtensilsCrossed, Search, Filter, Sparkles, FolderTree, LayoutGrid } from 'lucide-react';
+import { Plus, Pencil, Trash2, UtensilsCrossed, Search, Filter, Sparkles, FolderTree, LayoutGrid, UploadCloud } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +16,8 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
+import MenuImportDialog from '@/components/MenuImportDialog';
+import MenuAssistantPanel from '@/components/MenuAssistantPanel';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import { cn } from '@/lib/utils';
@@ -199,6 +201,37 @@ export default function MenuPage() {
   const [search, setSearch] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+    const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResponse, setAiResponse] = useState('');
+
+  const handleAI = async () => {
+    if (!aiPrompt.trim()) return;
+
+    setAiLoading(true);
+    setAiResponse('');
+
+    try {
+      const response = await api.post('/api/ai/test', {
+        prompt: aiPrompt.trim(),
+      });
+
+      setAiResponse(
+        response.data?.message ||
+        response.data?.response ||
+        JSON.stringify(response.data)
+      );
+    } catch (error) {
+      console.error('AI error:', error);
+      setAiResponse(
+        error.response?.data?.error || 'AI request failed'
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const fetchItems = useCallback(() => {
     setLoading(true);
@@ -318,6 +351,14 @@ export default function MenuPage() {
 
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <Button
+            variant="outline"
+            onClick={() => setImportOpen(true)}
+            className="w-full sm:w-auto justify-center font-bold gap-2 rounded-xl px-4 py-2.5 h-auto text-xs border-slate-300"
+          >
+            <UploadCloud className="w-4 h-4" />
+            Import from file
+          </Button>
+          <Button
             onClick={() => router.push('/menu/new')}
             className="w-full sm:w-auto justify-center bg-gradient-to-r from-orange-500 to-teal-600 hover:from-orange-600 hover:to-teal-700 text-white font-bold gap-2 shadow-sm rounded-xl px-4 py-2.5 h-auto text-xs"
           >
@@ -326,6 +367,9 @@ export default function MenuPage() {
           </Button>
         </div>
       </div>
+
+      {/* Ask questions about the menu. Read-only: no question changes a dish. */}
+      <MenuAssistantPanel />
 
       {/* ── SEARCH & FILTER CONTROLS ── */}
       <div className="space-y-3">
@@ -563,6 +607,13 @@ export default function MenuPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* AI menu import: upload a photo or PDF, review, then confirm */}
+      <MenuImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={fetchItems}
+      />
     </div>
   );
 }

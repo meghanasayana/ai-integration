@@ -11,6 +11,8 @@ const adminRoutes = require('./routes/admin.routes')
 const restaurantRoutes = require('./routes/restaurant.routes')
 const menuRoutes = require('./routes/menu.routes')
 const aiRoutes = require('./routes/ai.routes')
+const menuImportRoutes = require('./routes/menuImport.routes')
+const menuAssistantRoutes = require('./routes/menuAssistant.routes')
 
 const app = express()
 
@@ -61,6 +63,8 @@ app.use('/api/admin', adminRoutes)
 app.use('/api/restaurant', restaurantRoutes)
 app.use('/api/menu', menuRoutes)
 app.use('/api/ai', aiRoutes)
+app.use('/api/restaurant/menu-import', menuImportRoutes)
+app.use('/api/restaurant/menu-assistant', menuAssistantRoutes)
 
 // ─── Health check ────────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
