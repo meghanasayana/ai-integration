@@ -29,6 +29,7 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
   const [dragging, setDragging] = useState(false);
   const [mode, setMode] = useState('file');         // file | text
   const [pastedText, setPastedText] = useState('');
+  const [listFilter, setListFilter] = useState('all');  // all | review | ready
   const [error, setError] = useState(null);
   const [plan, setPlan] = useState(null);
   const [meta, setMeta] = useState(null);
@@ -40,7 +41,7 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
   const reset = useCallback(() => {
     setStage('pick'); setFile(null); setError(null); setPlan(null);
     setMeta(null); setSelected({}); setPrices({}); setReport(null);
-    setMode('file'); setPastedText('');
+    setMode('file'); setPastedText(''); setListFilter('all');
   }, []);
 
   const close = (next) => {
@@ -152,6 +153,10 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
         categoryName: entry.categoryName,
         price: prices[i] !== undefined && prices[i] !== '' ? prices[i] : entry.price,
         portions: entry.portions,
+        // Whether the dish is vegetarian, worked out from its name and section.
+        // Without this the server never receives it and every imported dish
+        // falls back to the column default, which marks cakes non-vegetarian.
+        isVeg: entry.isVeg,
       }));
   };
 
@@ -179,6 +184,23 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
 
   const readyCount = plan ? plan.entries.filter((e) => e.status === 'ready').length : 0;
   const reviewCount = plan ? plan.entries.filter((e) => e.status !== 'ready').length : 0;
+
+  /**
+   * The entries on screen, each carrying its ORIGINAL index.
+   *
+   * The tick boxes and the typed-in prices are keyed by position in the full
+   * list, so filtering must not renumber them - otherwise hiding the ready
+   * entries would silently move every tick onto a different dish.
+   */
+  const visibleEntries = plan
+    ? plan.entries
+        .map((entry, i) => ({ entry, i }))
+        .filter(({ entry }) => {
+          if (listFilter === 'review') return entry.status !== 'ready';
+          if (listFilter === 'ready') return entry.status === 'ready';
+          return true;
+        })
+    : [];
   const selectedCount = Object.values(selected).filter(Boolean).length;
 
   return (
@@ -313,14 +335,48 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
         {/* -------------------------------------------------------- review */}
         {(stage === 'review' || stage === 'saving') && plan && (
           <>
+            {/* The counts double as filters: with 300 entries, finding the 45
+                that need attention by scrolling is not realistic. */}
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold">
+              <button
+                type="button"
+                onClick={() => setListFilter('all')}
+                className={cn(
+                  'px-2.5 py-1 rounded-full font-semibold transition-colors',
+                  listFilter === 'all'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+                )}
+              >
+                All {plan.entries.length}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setListFilter('ready')}
+                className={cn(
+                  'px-2.5 py-1 rounded-full font-semibold transition-colors',
+                  listFilter === 'ready'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+                )}
+              >
                 {readyCount} ready
-              </span>
+              </button>
+
               {reviewCount > 0 && (
-                <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setListFilter('review')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-full font-semibold transition-colors',
+                    listFilter === 'review'
+                      ? 'bg-amber-600 text-white'
+                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100',
+                  )}
+                >
                   {reviewCount} need review
-                </span>
+                </button>
               )}
               {meta?.durationMs && (
                 <span className="text-slate-400 ml-auto">
@@ -330,7 +386,13 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
             </div>
 
             <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-2 mt-1">
-              {plan.entries.map((entry, i) => {
+              {visibleEntries.length === 0 && (
+                <p className="py-8 text-center text-xs text-slate-500">
+                  Nothing in this view.
+                </p>
+              )}
+
+              {visibleEntries.map(({ entry, i }) => {
                 const blocking = entry.warnings.filter((w) => w.blocking);
                 const notes = entry.warnings.filter((w) => !w.blocking);
                 const needsPrice = entry.price === null;

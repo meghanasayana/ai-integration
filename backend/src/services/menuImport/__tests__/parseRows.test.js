@@ -347,3 +347,119 @@ test('cakes priced by weight get their own portions', () => {
   ])
   assert.equal(result.stats.ambiguous, 0)
 })
+
+/* ------------- a dish whose name ends in a number ------------------------ */
+
+test('a number in the dish name is not taken as its price', () => {
+  // Reported from a real menu: "Chicken 65" with its price in a separate
+  // column imported as "Chicken" priced 65, and the real price was lost.
+  const result = parseRows([
+    ['STARTERS'],
+    ['Chicken 65', '190'],
+    ['Paneer 65', '170'],
+    ['Chicken 65 Bone (8 Pcs)', '190'],
+  ])
+
+  assert.equal(find(result, 'Chicken 65').item.price, '190')
+  assert.equal(find(result, 'Paneer 65').item.price, '170')
+  assert.equal(find(result, 'Chicken 65 Bone (8 Pcs)').item.price, '190')
+  assert.equal(result.stats.ambiguous, 0, 'nothing should be ambiguous here')
+})
+
+test('a lone cell that swallowed its prices is still split', () => {
+  // The opposite case must keep working: no other cell carries a price, so the
+  // numbers at the end of the name really are the prices.
+  const result = parseRows([
+    ['Barbeque'],
+    ['Full', 'Half', 'Quarter'],
+    ['Pepper Barbeque Chicken 450 250 160'],
+  ])
+
+  assert.deepEqual(find(result, 'Pepper Barbeque Chicken').item.portions, [
+    { label: 'Full', price: '450' },
+    { label: 'Half', price: '250' },
+    { label: 'Quarter', price: '160' },
+  ])
+})
+
+test('"Dish" as a column heading does not become a category', () => {
+  // "Dish | Quarter | Half | Full" is a table header. Treating the first cell
+  // as a section name filed the grills under a category called "Dish".
+  const result = parseRows([
+    ['GRILLS'],
+    ['Dish', 'Quarter', 'Half', 'Full'],
+    ['Grill Chicken', '140', '200', '420'],
+  ])
+
+  assert.equal(find(result, 'Grill Chicken').category, 'GRILLS')
+  assert.ok(!result.categories.some((c) => c.name === 'Dish'))
+})
+
+/* ------------- labels a camera got slightly wrong ------------------------ */
+
+const { canonicalPortion, isPortionWord } = require('../parseRows')
+
+test('a portion label misread by OCR is still recognised', () => {
+  // Reading a photograph, l / I / 1 are the same few pixels, so "Full" comes
+  // back as "Ful" or "FuII". Demanding an exact match meant every biryani lost
+  // its Half and Full prices and became two unlabelled numbers.
+  for (const misread of ['Ful', 'FuII', 'FuIl', 'Fuli']) {
+    assert.ok(isPortionWord(misread), misread + ' should be read as a label')
+  }
+  for (const misread of ['Haif', 'Ouarter', 'Quartcr', 'Smali', 'Larqe']) {
+    assert.ok(isPortionWord(misread), misread)
+  }
+})
+
+test('a misread label is stored correctly spelled', () => {
+  // The customer must not be shown "Ful".
+  assert.equal(canonicalPortion('Ful'), 'Full')
+  assert.equal(canonicalPortion('FuII'), 'Full')
+  assert.equal(canonicalPortion('Haif'), 'Half')
+  assert.equal(canonicalPortion('Ouarter'), 'Quarter')
+  assert.equal(canonicalPortion('Dry'), 'Dry')
+})
+
+test('a table heading is never a portion label', () => {
+  // Tolerating OCR errors made this urgent: "Dish" is one letter from "Fish",
+  // which IS a label on menus priced by meat. Counting the heading as a label
+  // gave three labels for two price columns and lost both prices.
+  for (const heading of ['Dish', 'Item', 'Name', 'Price', 'Rate']) {
+    assert.equal(isPortionWord(heading), false, heading)
+  }
+  // Words that must stay labels.
+  for (const label of ['Fish', 'Dry', 'Half', 'Quarter']) {
+    assert.ok(isPortionWord(label), label)
+  }
+})
+
+test('a biryani table with misread headings keeps its portions', () => {
+  const result = parseRows([
+    ['BIRYANI'],
+    ['Dish', 'Haif', 'FuII'],
+    ['Chicken Biryani', '180', '320'],
+    ['Mutton Biryani', '240', '430'],
+  ])
+
+  assert.equal(result.stats.ambiguous, 0)
+  assert.deepEqual(find(result, 'Chicken Biryani').item.portions, [
+    { label: 'Half', price: '180' },
+    { label: 'Full', price: '320' },
+  ])
+  assert.equal(find(result, 'Mutton Biryani').category, 'BIRYANI')
+})
+
+test('the restaurant name is not imported as a dish', () => {
+  // "ANBUDE   CAFE" arrives as separate cells because the title is widely
+  // spaced. It was being reported as a dish whose price could not be read.
+  const result = parseRows([
+    ['ANBUDE', 'CAFE'],
+    ['STARTERS'],
+    ['Chicken 65', '190'],
+  ])
+
+  assert.equal(result.stats.dishes, 1)
+  assert.equal(result.stats.unparsed, 0, 'the banner must not be flagged as a dish')
+  assert.equal(find(result, 'Chicken 65').item.price, '190')
+  assert.ok(!result.categories.some((c) => c.items.some((i) => /ANBUDE/i.test(i.name))))
+})

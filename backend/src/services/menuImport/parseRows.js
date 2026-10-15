@@ -1,5 +1,7 @@
 'use strict'
 
+const { editDistance } = require('./dishName')
+
 /**
  * Reading reconstructed rows directly, with no model.
  *
@@ -40,6 +42,12 @@ const UNIT_WORDS = new Set([
   'ml', 'l', 'ltr', 'ltrs', 'litre', 'litres', 'liter', 'liters',
   'scoop', 'scoops', 'glass', 'glasses', 'bottle', 'bottles',
   'cup', 'cups', 'mug', 'slice', 'slices', 'box', 'pack',
+])
+
+/** Table column headings that are not section names. */
+const COLUMN_HEADERS = new Set([
+  'dish', 'dishes', 'item', 'items', 'name', 'menu', 'particulars',
+  'description', 'price', 'prices', 'rate', 'rates', 'amount', 'qty', 'sl', 'sno',
 ])
 
 function plainWord(text) {
@@ -95,9 +103,97 @@ function pricesIn(cell) {
   return found ? found.map((n) => n.replace(/,/g, '')) : null
 }
 
+/**
+ * Is this a portion label, allowing for OCR getting one letter wrong?
+ *
+ * OCR reads a photographed menu letter by letter and regularly confuses l / I /
+ * 1 and O / 0, so "Full" comes back as "Ful" or "FuII". Demanding an exact
+ * match left the label row unrecognised, and every biryani lost its Half and
+ * Full prices - they became two unlabelled numbers needing review instead.
+ *
+ * One wrong letter is allowed on words of four letters or more. Shorter words
+ * must match exactly: at three letters almost anything is one edit from
+ * something, and a dish called "Egg" must not become a portion label.
+ */
+/**
+ * Fold the letter shapes OCR cannot tell apart into one character each.
+ *
+ * Reading a photograph, "Full" comes back as "Ful", "FuII" or "FuIl" because
+ * l, I and 1 are the same handful of pixels. Comparing after folding those
+ * together catches the whole family at once, rather than guessing at an edit
+ * distance wide enough to cover it - which would also start matching real
+ * words to each other.
+ */
+function ocrCanon(text) {
+  return String(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .replace(/[il1|]/g, 'l')
+    .replace(/0/g, 'o')
+    .replace(/5/g, 's')
+    .replace(/8/g, 'b')
+}
+
+const PORTION_CANON = new Map()
+for (const word of PORTION_WORDS) {
+  const key = ocrCanon(word)
+  if (!PORTION_CANON.has(key)) PORTION_CANON.set(key, word)
+}
+
+/**
+ * The correctly spelled label for a word OCR may have mangled.
+ *
+ * Storing "Ful" and "Haif" on a dish would put the misreading in front of a
+ * customer, so a label that matched only approximately is written back in its
+ * proper form. A word that matched exactly keeps its printed spelling.
+ */
+function canonicalPortion(word) {
+  const clean = String(word).toLowerCase().replace(/[^a-z]/g, '')
+  const title = (w) => w.charAt(0).toUpperCase() + w.slice(1)
+
+  if (PORTION_WORDS.has(clean)) return title(clean)
+
+  const canon = ocrCanon(word)
+  const exact = PORTION_CANON.get(canon)
+  if (exact) return title(exact)
+
+  for (const [key, original] of PORTION_CANON.entries()) {
+    if (key.length < 4) continue
+    if (Math.abs(key.length - canon.length) > 1) continue
+    if (editDistance(key, canon) <= 1) return title(original)
+  }
+
+  return String(word).trim()
+}
+
 function isPortionWord(cell) {
   const clean = String(cell).toLowerCase().replace(/[^a-z]/g, '')
-  return PORTION_WORDS.has(clean)
+  if (clean === '') return false
+
+  // A table heading is never a portion label, and tolerating OCR errors made
+  // this urgent: "Dish" is one letter from "Fish", which IS a label on menus
+  // that price by meat. Counting the heading as a label gave three labels for
+  // two price columns, so every biryani lost its Half and Full prices.
+  if (COLUMN_HEADERS.has(clean)) return false
+
+  if (PORTION_WORDS.has(clean)) return true
+
+  const canon = ocrCanon(cell)
+  if (canon === '') return false
+  if (PORTION_CANON.has(canon)) return true
+
+  // A single missing or extra letter, on words long enough for that to be
+  // meaningful. Below four letters almost anything is one edit from something,
+  // and a dish called "Egg" must not be read as a column label.
+  if (canon.length < 3) return false
+
+  for (const key of PORTION_CANON.keys()) {
+    if (key.length < 4) continue
+    if (Math.abs(key.length - canon.length) > 1) continue
+    if (editDistance(key, canon) <= 1) return true
+  }
+
+  return false
 }
 
 /**
@@ -125,13 +221,20 @@ function expandPortionCell(cell) {
     // price columns, so the row was reported as unlabelled and every cake and
     // bottled drink went to review needlessly.
     if (isQuantityWord(word) && next && isUnitWord(next)) {
-      labels.push(word + ' ' + next)
+      const quantity = isPortionWord(word) ? canonicalPortion(word) : word
+      labels.push(quantity + ' ' + next)
       i += 2
       continue
     }
 
-    // "250ml" with no space, and the plain size words.
-    if (isPortionWord(word) || (/\d/.test(word) && isUnitWord(word))) {
+    // "250ml" with no space keeps its printed form; a size word is written
+    // back correctly spelled in case OCR mangled it.
+    if (isPortionWord(word)) {
+      labels.push(canonicalPortion(word))
+      i += 1
+      continue
+    }
+    if (/\d/.test(word) && isUnitWord(word)) {
       labels.push(word)
       i += 1
       continue
@@ -275,7 +378,16 @@ function parseRows(rows) {
     const tail = cells.slice(1)
     const tailLabels = tail.length > 0 ? portionLabelsOf(tail) : null
     if (tailLabels) {
-      if (looksLikeName(cells[0]) && !isPortionWord(cells[0])) setCategory(cells[0])
+      // "Dish  Quarter  Half  Full" leads with a column header, not a section
+      // name. Treating it as one filed the grills under a category called
+      // "Dish" and lost the real heading.
+      if (
+        looksLikeName(cells[0]) &&
+        !isPortionWord(cells[0]) &&
+        !COLUMN_HEADERS.has(plainWord(cells[0]))
+      ) {
+        setCategory(cells[0])
+      }
       portionLabels = tailLabels
       continue
     }
@@ -297,14 +409,20 @@ function parseRows(rows) {
       continue
     }
 
-    // The name, plus any prices that merged into the name cell.
-    const split = splitNameAndPrices(working[0])
-    const name = split.name
+    // A banner such as "ANBUDE   CAFE" arrives as several cells because the
+    // letters are widely spaced, with no price anywhere. Reporting it as a dish
+    // whose price could not be read put the restaurant's own name in the review
+    // list. Capitals and no digits at all means a heading, not a dish.
+    if (!cells.some(hasDigit) && cells.every((c) => c === c.toUpperCase())) {
+      setCategory(cells.join(' '))
+      continue
+    }
 
+    // The name, plus any prices that merged into the name cell.
     // Values are kept in the order printed, including the not-sold dashes, so a
     // gap in the middle does not shift the remaining prices onto the wrong
     // labels - which would quietly sell a Full portion at the Half price.
-    const values = split.tokens.slice()
+    const values = []
     let unreadableCell = false
 
     for (const cell of working.slice(1)) {
@@ -325,6 +443,19 @@ function parseRows(rows) {
       unreadableCell = true
       values.length = 0
       break
+    }
+
+    // Only mine the name cell for prices when no other cell carried one.
+    //
+    // "Chicken 65" beside a separate "190" is a dish whose NAME ends in a
+    // number; stripping it imported "Chicken" priced 65 and threw the real
+    // price away. A lone cell like "Pepper Barbeque Chicken 450 250 160" has
+    // genuinely swallowed its prices and still needs splitting.
+    let name = working[0]
+    if (values.length === 0 && !unreadableCell) {
+      const split = splitNameAndPrices(working[0])
+      name = split.name
+      for (const token of split.tokens) values.push(token)
     }
 
     const priced = values.filter((v) => v.price)
@@ -387,6 +518,7 @@ module.exports = {
   parseRows,
   splitNameAndPrices,
   isPortionWord,
+  canonicalPortion,
   isUnitWord,
   expandPortionCell,
   portionLabelsOf,

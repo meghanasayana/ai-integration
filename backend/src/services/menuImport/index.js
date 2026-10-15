@@ -32,6 +32,7 @@ const { buildImportPlan } = require('./buildImportPlan')
 const { mergeCategories } = require('./mergePages')
 const { verifyCoverage, rowsNotRepresented } = require('./verifyCoverage')
 const { parseRows, splitNameAndPrices } = require('./parseRows')
+const { extractImageRows, OcrError } = require('./imageOcr')
 
 /** Longest pasted menu accepted. Keeps one request small enough to stay quick. */
 const MAX_PASTE_CHARS = 8000
@@ -180,6 +181,57 @@ async function readLeftovers(unparsed, allRows, options) {
 }
 
 /**
+ * Read a photo with OCR and parse the rows it produces.
+ *
+ * Returns null when OCR is unavailable or produced nothing usable, so the
+ * caller can fall back to the vision model rather than refusing the file.
+ */
+async function readImageByOcr(buffer, options) {
+  let ocr
+  try {
+    ocr = await extractImageRows(buffer)
+  } catch (err) {
+    if (!(err instanceof OcrError)) throw err
+    console.warn(`[menuImport] OCR unavailable (${err.code}): falling back to the vision model`)
+    return null
+  }
+
+  const parsed = parseRows(ocr.rows)
+  console.log(
+    `[menuImport] image read by OCR: ${ocr.words} words, confidence ` +
+      `${ocr.confidence === null ? '?' : Math.round(ocr.confidence)} -> ` +
+      `${parsed.stats.dishes} dishes, ${parsed.stats.unparsed} unreadable`,
+  )
+
+  // No dishes at all means OCR read something but not a menu, so the vision
+  // model deserves its turn.
+  if (parsed.stats.dishes === 0) return null
+
+  const lists = [parsed.categories]
+  let failures = []
+
+  if (shouldAskModel(parsed.unparsed.length)) {
+    const leftovers = await readLeftovers(parsed.unparsed, ocr.rows, options)
+    for (const list of leftovers.categories) lists.push(list)
+    failures = leftovers.failures
+  }
+
+  pushList(lists, rowsAsReviewItems(rowsNotRepresented(parsed.unparsed, mergeCategories(lists))))
+
+  return {
+    categories: mergeCategories(lists),
+    failures,
+    stats: {
+      words: ocr.words,
+      ocrConfidence: ocr.confidence,
+      dishes: parsed.stats.dishes,
+      ambiguous: parsed.stats.ambiguous,
+      unparsed: parsed.stats.unparsed,
+    },
+  }
+}
+
+/**
  * Read a PDF whose rows reconstructed cleanly: parse what is unambiguous, and
  * ask the model only about what is not.
  */
@@ -249,16 +301,30 @@ async function extractMenuPlan(file, options = {}) {
 
   try {
     if (classification.kind === 'image') {
-      const aiResult = await extractFromImage({
-        base64Image: file.buffer.toString('base64'),
-        ...options,
-      })
-      const validated = validateAiOutput(aiResult.raw)
-      if (!validated.ok) return invalidOutput(validated, aiResult.raw)
+      // OCR first. It reports where each word sits, so a photo becomes the same
+      // positioned-word input a PDF gives and flows into the parser that
+      // already works - seconds instead of the several minutes the vision model
+      // takes on a CPU.
+      const fromOcr = await readImageByOcr(file.buffer, options)
 
-      categories = validated.categories
-      model = aiResult.model
-      source = { kind: 'image' }
+      if (fromOcr) {
+        categories = fromOcr.categories
+        partial = fromOcr.failures.length > 0 ? fromOcr.failures : null
+        source = { kind: 'image', mode: 'ocr', ...fromOcr.stats }
+      } else {
+        // OCR found text but no dishes in it, or is not installed. The vision
+        // model is the fallback: slow, but it reads layouts OCR cannot.
+        const aiResult = await extractFromImage({
+          base64Image: file.buffer.toString('base64'),
+          ...options,
+        })
+        const validated = validateAiOutput(aiResult.raw)
+        if (!validated.ok) return invalidOutput(validated, aiResult.raw)
+
+        categories = validated.categories
+        model = aiResult.model
+        source = { kind: 'image', mode: 'vision' }
+      }
     } else {
       const content = await extractPdfContent(file.buffer)
       console.log(
@@ -307,7 +373,7 @@ async function extractMenuPlan(file, options = {}) {
       }
     }
   } catch (err) {
-    if (err instanceof PdfError || err instanceof OllamaError) {
+    if (err instanceof PdfError || err instanceof OllamaError || err instanceof OcrError) {
       return { ok: false, code: err.code, message: err.message }
     }
     // Never surface an unexpected internal error to the browser.

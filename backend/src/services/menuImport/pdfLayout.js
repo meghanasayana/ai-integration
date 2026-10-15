@@ -51,6 +51,18 @@ const MIN_GUTTER_POINTS = 18
 /** Blocks at least this tall are held to the words-and-numbers check. */
 const SUBSTANTIAL_BLOCK_ROWS = 5
 
+/**
+ * Share of a block's rows that must pair a label with a number for the block to
+ * be believable as a section of its own.
+ *
+ * A menu with names on the left and prices on the right has a wide empty
+ * middle, which looks exactly like the gutter between two side-by-side
+ * sections. Splitting there put every name in one block and every price in
+ * another, and the only dishes that survived were those with a number inside
+ * the name - "Chicken 65" was imported as "Chicken" priced 65.
+ */
+const MIN_BLOCK_PAIRING = 0.25
+
 /** Most side-by-side sections to look for on one page. */
 const MAX_BLOCKS = 3
 
@@ -247,6 +259,11 @@ function blocksLookIndependent (blocks) {
     const hasWords = rows.some((row) => row.some((cell) => /[A-Za-z]{3}/.test(cell)))
     const hasNumbers = rows.some((row) => row.some((cell) => /\d/.test(cell)))
     if (!hasWords || !hasNumbers) return false
+
+    // Containing words somewhere and numbers somewhere is not enough: a column
+    // of names including "Chicken 65" satisfies both while pairing nothing. A
+    // real section has rows carrying a name AND its price together.
+    if (pairingScore([{ num: 1, rows }]).ratio < MIN_BLOCK_PAIRING) return false
   }
 
   return true

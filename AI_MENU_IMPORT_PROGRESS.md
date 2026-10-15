@@ -607,3 +607,97 @@ adminAssistant 32.
   restaurant, 2 users, 14 categories, 39 dishes; Ollama running with
   qwen2.5:3b and qwen3-vl:4b installed
 - Paste import, PDF import (~4s for 12 pages), menu assistant with dish cards
+
+---
+
+## Session update — 15 Oct 2026: images, and a cluster of layout bugs
+
+### Images now work without the vision model
+
+`imageOcr.js` reads a PNG or JPG with tesseract.js, which reports WHERE each
+word sits - the same thing pdfjs gives for a PDF. So an image becomes another
+source of positioned words and flows into the parser that already worked:
+
+    PDF   -> pdfjs      -> words + positions -+
+                                              +-> columns -> rows -> parse
+    Image -> tesseract  -> words + positions -+
+
+Seconds instead of the several minutes the vision model took on a CPU. The
+vision model remains the automatic fallback when OCR finds no dishes.
+
+One coordinate detail: an image measures y downwards, a PDF upwards. The y
+values are negated in the adapter; without that the menu reads bottom-up.
+
+Needs `npm install tesseract.js`, and an internet connection on first run to
+download about 15MB of language data, which is then cached.
+
+### Bugs found by testing a real one-page menu
+
+**Only 2 dishes imported from a clean menu.** The menu had names far left and
+prices far right, leaving a wide empty middle, which the column splitter read
+as the gutter between two side-by-side sections. It split names away from
+prices, and the only dishes that survived were those with a number inside the
+name: "Chicken 65" imported as "Chicken" priced 65.
+
+The guard meant to prevent this only asked whether a block contained words
+somewhere and numbers somewhere - and a column of names including "Chicken 65"
+passes both while pairing nothing. It now requires a share of rows carrying a
+name AND its price together (`MIN_BLOCK_PAIRING`).
+
+**"Chicken 65" lost its price even unsplit.** The name cell was being mined for
+trailing digits. It is now only mined when no other cell in the row carried a
+price, so "Pepper Barbeque Chicken 450 250 160" in a lone cell still splits
+correctly.
+
+**Biryani lost its Half and Full prices.** Not a biryani problem: once OCR
+mistakes were tolerated, the heading "Dish" came within one letter of "Fish",
+which genuinely IS a portion label on menus priced by meat. Three labels for
+two price columns, no match, both prices dropped. Table headings - Dish, Item,
+Name, Price, Rate - are now never portion labels.
+
+**"Ful" and "FuII".** Reading a photo, l / I / 1 are the same few pixels.
+`ocrCanon` folds those shapes together before comparing, so the whole family
+matches, and `canonicalPortion` writes the label back correctly spelled -
+a customer never sees "Ful".
+
+Guardrail: the correction only fires within one edit of a real label, on words
+of four letters or more. "Egg" stays a dish. Missing a label is better than
+inventing one.
+
+**The restaurant's own name imported as a dish.** A widely spaced title arrives
+as several cells with no price, which looked like a dish whose price could not
+be read. Capitals plus no digits anywhere is now a heading.
+
+**The browser never sent the veg flag.** Found while adding the review filter:
+`chosenEntries` did not include `isVeg`, so every dish imported through the UI
+landed non-vegetarian whatever the inference decided - quietly recreating the
+Black Forest bug on every future import.
+
+### Review list filter
+
+The counts at the top of the review screen are now buttons: All / ready / need
+review. Clicking "45 need review" shows only those. Ticks and typed prices are
+keyed by position in the FULL list, so filtering never renumbers them - getting
+that wrong would silently move every tick onto a different dish.
+
+### Tests: 174 passing
+
+menuImport 26 · parseRows 32 · pdfLayout 9 · verifyCoverage 6 · dietFromName 9 ·
+imageOcr 8 · menuQuery filter 20 / query 13 / ask 10 · dishPhotos score 9 ·
+adminAssistant 32
+
+### Confirmed working in the browser this session
+
+- The 12-page PDF imports end to end (307 dishes, ~4 seconds)
+- A photographed one-page menu imports via OCR
+- Paste import
+- The menu assistant with dish cards
+
+### Still not done
+
+1. `menu.controller.js` omits `portions`, so multi-portion dishes show only
+   their base price on the CUSTOMER menu.
+2. Feature 2 (an assistant that makes changes) - safety layer and 32 tests, but
+   nothing connected.
+3. Automatic dish photos - scoring built and tested, nothing wired.
+4. Nothing deployed. Live site and production database untouched.

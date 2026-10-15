@@ -133,3 +133,27 @@ test('mergeCategories keeps category order and ignores malformed pages', () => {
   assert.deepEqual(merged.map((c) => c.name), ['Soup', 'Mandi'])
   assert.equal(merged[0].items.length, 2)
 })
+
+test('a wide name-to-price gap is not mistaken for two sections', () => {
+  // A single-column menu with right-aligned prices has a wide empty middle,
+  // which looks exactly like the gutter between side-by-side sections.
+  // Splitting there separated every name from every price, and only dishes
+  // with a number inside the name survived - "Chicken 65" priced 65.
+  const items = [
+    item('Chicken 65', 45, 700, 70), item('190', 690, 700, 28),
+    item('Dragon Chicken', 45, 670, 95), item('220', 690, 670, 28),
+    item('Chicken Manchurian', 45, 640, 120), item('190', 690, 640, 28),
+    item('Paneer 65', 45, 610, 62), item('170', 690, 610, 28),
+    item('Veg Manchurian', 45, 580, 95), item('160', 690, 580, 28),
+    item('Gobi 65', 45, 550, 50), item('150', 690, 550, 28),
+  ]
+
+  const blocks = splitIntoBlocks(items, 768)
+  assert.equal(blocks.length, 1, 'the page must not be split')
+
+  const rows = blocks.flatMap((block) => groupIntoRows(block))
+  assert.ok(
+    rows.every((row) => row.length === 2),
+    'every row must keep its name and its price together: ' + JSON.stringify(rows),
+  )
+})
