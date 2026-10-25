@@ -39,13 +39,16 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
   const [combos, setCombos] = useState([]);        // combo boxes found in the file
   const [comboPicked, setComboPicked] = useState({});  // index -> boolean
   const [comboPrices, setComboPrices] = useState({});  // index -> typed-in price
+  const [portionLabels, setPortionLabels] = useState({}); // index -> label per price
+  const [clearing, setClearing] = useState(null);   // null | counts | 'working'
   const inputRef = useRef(null);
 
   const reset = useCallback(() => {
     setStage('pick'); setFile(null); setError(null); setPlan(null);
     setMeta(null); setSelected({}); setPrices({}); setReport(null);
     setMode('file'); setPastedText(''); setListFilter('all');
-    setCombos([]); setComboPicked({}); setComboPrices({});
+    setCombos([]); setComboPicked({}); setComboPrices({}); setPortionLabels({});
+    setClearing(null);
   }, []);
 
   const close = (next) => {
@@ -79,6 +82,21 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
       // Confident entries start ticked. Anything needing review does not.
       const initial = {};
       extracted.entries.forEach((entry, i) => { initial[i] = entry.status === 'ready'; });
+
+      // Two unlabelled prices are Regular and Special. Filled in here, shown
+      // on the card, and ticked - the dish is no longer something to decide.
+      const guessedLabels = {};
+      extracted.entries.forEach((entry, n) => {
+        const printed =
+          typeof entry.price === 'string' && entry.price.includes('/')
+            ? entry.price.split('/').map((p) => p.trim()).filter(Boolean)
+            : [];
+        if (printed.length === 2) {
+          guessedLabels[n] = ['Regular', 'Special'];
+          initial[n] = true;
+        }
+      });
+      setPortionLabels(guessedLabels);
       setSelected(initial);
 
       // Combos found in the same file. A combo whose price could not be read
@@ -137,6 +155,21 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
 
       const initial = {};
       extracted.entries.forEach((entry, i) => { initial[i] = entry.status === 'ready'; });
+
+      // Two unlabelled prices are Regular and Special. Filled in here, shown
+      // on the card, and ticked - the dish is no longer something to decide.
+      const guessedLabels = {};
+      extracted.entries.forEach((entry, n) => {
+        const printed =
+          typeof entry.price === 'string' && entry.price.includes('/')
+            ? entry.price.split('/').map((p) => p.trim()).filter(Boolean)
+            : [];
+        if (printed.length === 2) {
+          guessedLabels[n] = ['Regular', 'Special'];
+          initial[n] = true;
+        }
+      });
+      setPortionLabels(guessedLabels);
       setSelected(initial);
 
       // Combos found in the same file. A combo whose price could not be read
@@ -165,21 +198,108 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
 
   /* ------------------------------------------------------------- commit */
 
+  /**
+   * The prices a flagged dish printed, as a list.
+   *
+   * The parser refuses to decide what "280 / 320" means and hands back exactly
+   * what the menu printed. Only the restaurant knows, so the labels are asked
+   * for here rather than guessed anywhere.
+   */
+  const pricesOf = (entry) =>
+    typeof entry.price === 'string' && entry.price.includes('/')
+      ? entry.price.split('/').map((p) => p.trim()).filter(Boolean)
+      : [];
+
+  /**
+   * Labels assumed for a dish whose prices carry none.
+   *
+   * Two prices on a menu like this are Regular and Special, which the
+   * restaurant confirmed. The assumption is filled in rather than applied
+   * behind your back: both labels sit in editable boxes on the card, so a
+   * menu that means Half and Full is two keystrokes away. Only the names are
+   * assumed - both prices are kept exactly as printed.
+   */
+  const defaultLabelsFor = (entry) =>
+    pricesOf(entry).length === 2 ? ['Regular', 'Special'] : null;
+
+  // Label sets a menu actually uses, offered as one click.
+  const LABEL_SETS = {
+    2: [['Regular', 'Special'], ['Half', 'Full'], ['Small', 'Large']],
+    3: [['Quarter', 'Half', 'Full'], ['Small', 'Medium', 'Large']],
+  };
+
+  const setLabelsFor = (index, labels) =>
+    setPortionLabels((all) => ({ ...all, [index]: labels }));
+
+  /** Give every flagged dish in the same category the same labels. */
+  const applyLabelsToCategory = (index, labels) => {
+    if (!plan) return;
+    const category = plan.entries[index].categoryName;
+    const count = labels.length;
+
+    setPortionLabels((all) => {
+      const next = { ...all };
+      plan.entries.forEach((entry, j) => {
+        if (entry.categoryName === category && pricesOf(entry).length === count) {
+          next[j] = labels;
+        }
+      });
+      return next;
+    });
+  };
+
+  /* ------------------------------------------------- clearing the menu */
+
+  const askToClear = async () => {
+    try {
+      const res = await api.get('/api/restaurant/menu-import/summary');
+      setClearing(res.data);
+    } catch {
+      toast.error('Could not check what is on the menu.');
+    }
+  };
+
+  const clearMenu = async () => {
+    setClearing('working');
+    try {
+      const res = await api.delete('/api/restaurant/menu-import/all', {
+        data: { confirm: true },
+      });
+      const { dishes, categories, combos } = res.data.removed;
+      toast.success(`Removed ${dishes} dishes, ${categories} categories, ${combos} combos`);
+      setClearing(null);
+      onImported?.();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'The menu could not be cleared.');
+      setClearing(null);
+    }
+  };
+
   const chosenEntries = () => {
     if (!plan) return [];
     return plan.entries
       .map((entry, i) => ({ entry, i }))
       .filter(({ i }) => selected[i])
-      .map(({ entry, i }) => ({
+      .map(({ entry, i }) => {
+        // Labels typed in here turn "280 / 320" into real portions.
+        const printed = pricesOf(entry);
+        const labels = portionLabels[i];
+        const labelled =
+          printed.length > 1 && labels && labels.length === printed.length
+            ? printed.map((price, n) => ({ portion: labels[n], price }))
+            : null;
+
+        return {
         name: entry.name,
         categoryName: entry.categoryName,
-        price: prices[i] !== undefined && prices[i] !== '' ? prices[i] : entry.price,
-        portions: entry.portions,
+        price: labelled ? null : (prices[i] !== undefined && prices[i] !== '' ? prices[i] : entry.price),
+        portions: labelled || entry.portions,
         // Whether the dish is vegetarian, worked out from its name and section.
         // Without this the server never receives it and every imported dish
         // falls back to the column default, which marks cakes non-vegetarian.
         isVeg: entry.isVeg,
-      }));
+        };
+      });
   };
 
   const chosenCombos = () =>
@@ -338,6 +458,53 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
             <p className="mt-1 text-xs text-slate-500">
               JPG, PNG, WebP or PDF &middot; up to {MAX_MB}MB
             </p>
+
+            {/* Emptying the menu before a fresh import. Kept here because
+                this is where you are when you decide the last one was wrong,
+                and kept visually quiet because there is no undo. */}
+            <div className="mt-4 pt-3 border-t border-slate-200">
+              {clearing === null && (
+                <button
+                  type="button"
+                  onClick={askToClear}
+                  className="text-xs font-semibold text-rose-700 hover:text-rose-800 hover:underline"
+                >
+                  Clear the whole menu first
+                </button>
+              )}
+
+              {clearing === 'working' && (
+                <p className="text-xs text-slate-600">Clearing…</p>
+              )}
+
+              {clearing && clearing !== 'working' && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
+                  <p className="text-xs font-semibold text-rose-900">
+                    Delete {clearing.dishes} dishes, {clearing.categories} categories
+                    and {clearing.combos} combos?
+                  </p>
+                  <p className="text-[11px] text-rose-800 mt-0.5">
+                    This cannot be undone.
+                  </p>
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={clearMenu}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700"
+                    >
+                      Yes, clear it
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setClearing(null)}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <input
               ref={inputRef}
               type="file"
@@ -575,6 +742,68 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
                           ))}
                         </div>
                       )}
+
+                      {/* Two or more prices with nothing on the menu to say
+                          what they are. The parser will not guess; you say it
+                          once and it applies to the whole section. */}
+                      {pricesOf(entry).length > 1 && (() => {
+                        const printed = pricesOf(entry);
+                        const chosen = portionLabels[i] || [];
+                        const sets = LABEL_SETS[printed.length] || [];
+
+                        return (
+                          <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/70 p-2">
+                            <p className="text-[11px] font-semibold text-amber-900">
+                              What do these prices mean?
+                            </p>
+
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              {printed.map((price, n) => (
+                                <span key={n} className="flex items-center gap-1">
+                                  <input
+                                    type="text"
+                                    placeholder="label"
+                                    value={chosen[n] ?? ''}
+                                    onChange={(e) => {
+                                      const next = [...printed.map((_, k) => chosen[k] ?? '')];
+                                      next[n] = e.target.value;
+                                      setLabelsFor(i, next);
+                                    }}
+                                    className="w-20 h-7 rounded border border-amber-300 px-1.5 text-xs"
+                                  />
+                                  <span className="text-xs font-bold text-slate-700">&#8377;{price}</span>
+                                </span>
+                              ))}
+                            </div>
+
+                            {sets.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                {sets.map((set) => (
+                                  <button
+                                    key={set.join('/')}
+                                    type="button"
+                                    onClick={() => setLabelsFor(i, set)}
+                                    className="text-[11px] px-2 py-0.5 rounded-full bg-white border border-amber-300
+                                               text-amber-900 hover:bg-amber-100"
+                                  >
+                                    {set.join(' / ')}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+
+                            {chosen.length === printed.length && chosen.every(Boolean) && (
+                              <button
+                                type="button"
+                                onClick={() => applyLabelsToCategory(i, chosen)}
+                                className="mt-1.5 text-[11px] font-semibold text-amber-900 underline"
+                              >
+                                Use these for every dish in {entry.categoryName}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {needsPrice && (
                         <label className="flex items-center gap-2 mt-2 text-xs text-slate-700">

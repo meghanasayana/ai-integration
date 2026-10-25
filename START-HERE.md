@@ -81,7 +81,7 @@ node --test src/services/menuImport/__tests__/parseRows.test.js
 
 ---
 
-## Tests: 238 passing
+## Tests: 253 passing
 
 menuImport 26 · parseRows 24 · dietFromName 9 · pdfLayout 8 · verifyCoverage 6 ·
 menuQuery filter 20 / query 13 / ask 10 · dishPhotos score 9 · adminAssistant 32
@@ -154,6 +154,31 @@ a guess, and a guess here sells a full plate at the quarter price.
 
 The 11 are genuinely unlabelled on the printed page - "Handi parotta spl
 Chicken 280/320" with nothing saying which is which. Only the restaurant knows.
+
+### Later the same day
+
+- `splitIntoBands` — a page is cut at horizontal whitespace first, then
+  columns are found inside each band. A box straddling the column divide was
+  losing its prices. **667 dishes, 2 unreadable rows.**
+- A short bracketed cell joins the name; `(D)` becomes `(Dry)`. A row holding
+  only a number is counted and dropped. **668 dishes, 0 unreadable.**
+- Commit limit 500 -> 2000; the import transaction's 5-second Prisma default
+  raised to ten minutes (it could never have finished 668 dishes).
+- The customer menu now sends `portions`, and dish cards show the range and
+  each size. Previously a diner saw only the cheapest price.
+- **Clear the whole menu** in the import dialog: counts first, one yes/no, one
+  transaction, scoped to the logged-in restaurant, logged on the server.
+- Unlabelled prices: a control to say what `280 / 320` means and apply it to a
+  whole section. The parser still never guesses.
+
+### IMPORTANT: the live site is a newer codebase
+
+The live Edit Dish form has Pricing Structure (Single / Portions / Dry &
+Gravy) and Dish Classification (Standard / Regular / Special / Seasonal /
+Both Options) with separate Regular and Special prices. **None of those
+columns exist in this project's schema.** The portions written here are the
+old model and will not fill them. Get the live `schema.prisma` before
+attempting integration.
 
 ### KNOWN BROKEN: category headings on two lines
 

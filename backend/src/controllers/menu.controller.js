@@ -23,6 +23,13 @@ const getMenu = async (req, res) => {
         foodItems: {
           include: {
             category: { select: { id: true, name: true } },
+            // Without this a dish with Half and Full prices shows a diner only
+            // its cheapest one, with nothing to say the other sizes exist.
+            portions: {
+              where: { isAvailable: true },
+              orderBy: { price: 'asc' },
+              select: { id: true, portion: true, price: true },
+            },
           },
           orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
         },

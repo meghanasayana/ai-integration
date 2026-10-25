@@ -206,4 +206,63 @@ function sanitiseEntry(entry) {
   return { ok: true, entry: { name, categoryName, price, portions, isVeg } }
 }
 
-module.exports = { extract, extractText, commit }
+/**
+ * GET /api/restaurant/menu-import/summary
+ * What a clear would remove. Read-only.
+ */
+const summary = async (req, res) => {
+  const restaurantId = req.user.restaurantId
+  if (!restaurantId) {
+    return res.status(403).json({ error: 'This account is not linked to a restaurant.' })
+  }
+
+  const [dishes, categories, combos] = await Promise.all([
+    prisma.foodItem.count({ where: { restaurantId } }),
+    prisma.category.count({ where: { restaurantId } }),
+    prisma.combo.count({ where: { restaurantId } }),
+  ])
+
+  return res.json({ dishes, categories, combos })
+}
+
+/**
+ * DELETE /api/restaurant/menu-import/all
+ *
+ * Empties this restaurant's menu: dishes, their portions, categories and
+ * combos. Deliberately destructive and deliberately narrow - the restaurant
+ * comes from the session, never from the request, so no account can clear
+ * another's menu. There is no undo, which is why the browser asks first and
+ * why what was removed is logged and returned.
+ */
+const clearMenu = async (req, res) => {
+  const restaurantId = req.user.restaurantId
+  if (!restaurantId) {
+    return res.status(403).json({ error: 'This account is not linked to a restaurant.' })
+  }
+
+  if (req.body?.confirm !== true) {
+    return res.status(400).json({ error: 'Clearing the menu has to be confirmed.' })
+  }
+
+  try {
+    const removed = await prisma.$transaction(async (tx) => {
+      // Portions and combo lines go with their parents by cascade.
+      const dishes = await tx.foodItem.deleteMany({ where: { restaurantId } })
+      const categories = await tx.category.deleteMany({ where: { restaurantId } })
+      const combos = await tx.combo.deleteMany({ where: { restaurantId } })
+      return { dishes: dishes.count, categories: categories.count, combos: combos.count }
+    }, { maxWait: 15000, timeout: 5 * 60 * 1000 })
+
+    console.warn(
+      `[menu-import] menu cleared for restaurant ${restaurantId}: ` +
+        `${removed.dishes} dishes, ${removed.categories} categories, ${removed.combos} combos`,
+    )
+
+    return res.json({ removed })
+  } catch (err) {
+    console.error('[menu-import] clear failed:', err)
+    return res.status(500).json({ error: 'The menu could not be cleared. Nothing was removed.' })
+  }
+}
+
+module.exports = { extract, extractText, commit, summary, clearMenu }

@@ -6,6 +6,7 @@ const assert = require('node:assert/strict')
 const {
   groupIntoRows,
   splitIntoBlocks,
+  splitIntoBands,
   interleaveScore,
 } = require('../pdfLayout')
 const { mergeCategories } = require('../mergePages')
@@ -212,4 +213,64 @@ test('a single-column page is still left alone', () => {
 
   const blocks = splitIntoBlocks(items, 400)
   assert.strictEqual(blocks.length, 1, 'nothing to split')
+})
+
+/* ---- horizontal bands, after a box straddling the columns lost 6 dishes ---- */
+
+test('a page is cut into bands at full-width whitespace', () => {
+  const items = []
+  // One box at the top.
+  for (let i = 0; i < 5; i += 1) items.push(at(`Top ${i}`, 40, 700 - i * 14, 60))
+  // A clear gap, then a box lower down.
+  for (let i = 0; i < 5; i += 1) items.push(at(`Bottom ${i}`, 40, 500 - i * 14, 60))
+
+  const bands = splitIntoBands(items)
+  assert.strictEqual(bands.length, 2)
+  assert.ok(bands[0].every((i) => i.text.startsWith('Top')))
+  assert.ok(bands[1].every((i) => i.text.startsWith('Bottom')))
+})
+
+test('lines of one list are not cut into bands', () => {
+  const items = []
+  for (let i = 0; i < 12; i += 1) items.push(at(`Dish ${i}`, 40, 700 - i * 14, 60))
+  assert.strictEqual(splitIntoBands(items).length, 1)
+})
+
+test('a box straddling the column divide keeps its prices', () => {
+  // The Taj drinks page: two columns in the middle of the page, and a third
+  // box below them sitting across the divide. Splitting the whole page at one
+  // vertical line put that box's names on the left and its prices on the
+  // right, and six dishes arrived with no price.
+  const items = []
+
+  // Two side-by-side lists.
+  for (let i = 0; i < 6; i += 1) {
+    const y = 700 - i * 16
+    items.push(at(`Left ${i}`, 40, y, 60))
+    items.push(at(`${70 + i}`, 150, y, 20))
+    items.push(at(`Right ${i}`, 230, y, 60))
+    items.push(at(`${90 + i}`, 340, y, 20))
+  }
+
+  // A box underneath, straddling the divide: names left of it, prices right.
+  for (let i = 0; i < 6; i += 1) {
+    const y = 500 - i * 16
+    items.push(at(`Straddler ${i}`, 120, y, 90))
+    items.push(at('90', 300, y, 20))
+  }
+
+  const blocks = []
+  for (const band of splitIntoBands(items)) {
+    for (const block of splitIntoBlocks(band, 400)) blocks.push(block)
+  }
+
+  const rows = []
+  for (const block of blocks) for (const row of groupIntoRows(block)) rows.push(row)
+
+  const straddlers = rows.filter((r) => r[0] && r[0].startsWith('Straddler'))
+  assert.strictEqual(straddlers.length, 6, 'all six rows survive')
+  for (const row of straddlers) {
+    assert.strictEqual(row.length, 2, `"${row[0]}" lost its price`)
+    assert.strictEqual(row[1], '90')
+  }
 })

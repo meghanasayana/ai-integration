@@ -151,7 +151,17 @@ async function extractRows (buffer, options = {}) {
         page.cleanup()
       }
 
-      const blocks = splitColumns ? splitIntoBlocks(items, pageWidth) : [items]
+      // Bands first, then columns within each band: the number of columns
+      // changes down the page, and one split for the whole page cannot be
+      // right for all of it.
+      const blocks = []
+      if (splitColumns) {
+        for (const band of splitIntoBands(items)) {
+          for (const block of splitIntoBlocks(band, pageWidth)) blocks.push(block)
+        }
+      } else {
+        blocks.push(items)
+      }
 
       const rows = []
       for (const block of blocks) {
@@ -165,6 +175,56 @@ async function extractRows (buffer, options = {}) {
   } finally {
     await doc.destroy()
   }
+}
+
+/**
+ * Cut a page into horizontal bands at full-width whitespace.
+ *
+ * A designed menu is boxes, not columns: one box across the top, two side by
+ * side below it, one across the bottom. Splitting the whole page at a single
+ * vertical line cuts straight through the boxes that do not share it - on the
+ * Taj drinks page it put six Fruit Milk Shake names in the left column and
+ * their six prices in the right, and the dishes lost their prices.
+ *
+ * Each band is then free to have its own number of columns.
+ */
+function splitIntoBands (items) {
+  if (items.length === 0) return [items]
+
+  const lineHeight = median(items.map((i) => i.height)) || 10
+  // A gap has to be clearly bigger than the space between two lines of a list.
+  const minGap = lineHeight * 2.2
+
+  const sorted = items.slice().sort((a, b) => b.y - a.y)
+
+  const bands = []
+  let current = [sorted[0]]
+  let lowest = sorted[0].y
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const item = sorted[i]
+    if (lowest - item.y > minGap) {
+      bands.push(current)
+      current = []
+    }
+    current.push(item)
+    if (item.y < lowest) lowest = item.y
+  }
+  if (current.length > 0) bands.push(current)
+
+  // A band holding a line or two is a heading that happens to sit alone; it
+  // belongs with what follows rather than being a region of its own.
+  const merged = []
+  for (const band of bands) {
+    const previous = merged[merged.length - 1]
+    if (previous && band.length < 3) {
+      for (const item of band) previous.push(item)
+    } else {
+      merged.push(band)
+    }
+  }
+
+  return merged.length > 0 ? merged : [items]
 }
 
 /**
@@ -401,6 +461,7 @@ function median (numbers) {
 
 module.exports = {
   loadPdfjs,
+  splitIntoBands,
   extractRows,
   groupIntoRows,
   splitIntoBlocks,

@@ -285,6 +285,16 @@ function isDecorativeEcho(cell, currentCategory) {
   return words.includes(text.toUpperCase())
 }
 
+/** Single letters a menu uses as a shorthand beside a dish. */
+const QUALIFIER_WORDS = { d: 'Dry', g: 'Gravy' }
+
+/** "(D)" -> "(Dry)". Anything longer is already a word and is left alone. */
+function expandQualifier(cell) {
+  const inner = String(cell).replace(/^\(|\)$/g, '').trim()
+  const word = QUALIFIER_WORDS[inner.toLowerCase()]
+  return word ? `(${word})` : cell
+}
+
 /**
  * Split a name cell that swallowed its prices.
  * "Pepper Barbeque Chicken 450 250 160" -> name + three prices.
@@ -295,7 +305,22 @@ function splitNameAndPrices(cell) {
   // portions and marks the third as not sold. Stopping at the dash lost the
   // whole row, and dropping a dish is worse than any other failure here.
   const valueRun = '(?:(?:' + CURRENCY + NUMBER + TRAILING + '|[-–—])\\s*){1,6}'
-  const match = text.match(new RegExp('^(.*?[A-Za-z0-9)])\\s+(' + valueRun + ')$', 'i'))
+  let match = text.match(new RegExp('^(.*?[A-Za-z0-9)])\\s+(' + valueRun + ')$', 'i'))
+
+  // Prices separated by slashes, as "(F/H/Q) 510/300/200". The run above
+  // expects whitespace between them.
+  if (!match) {
+    match = text.match(/^(.*?[A-Za-z0-9)])\s+(\d{2,5}(?:\s*\/\s*\d{2,5})+)$/)
+  }
+
+  // No space at all: the PDF printed "Rice / Noodles240" with the price hard
+  // against the name. Only a letter or a closing bracket may precede it, so
+  // "Fish-65" and "Chicken 65" - names that genuinely end in a number - are
+  // left alone.
+  if (!match) {
+    match = text.match(/^(.*?[A-Za-z)])(\d{2,4})$/)
+  }
+
   if (!match) return { name: text, prices: [], tokens: [] }
 
   const found = match[2].match(new RegExp(NUMBER + '|[-–—]', 'g')) || []
@@ -323,6 +348,7 @@ function parseRows(rows) {
   let currentCategory = null
   let portionLabels = []
   let ambiguous = 0
+  let orphanPrices = 0
 
   const addItem = (item) => {
     const name = currentCategory || 'Uncategorised'
@@ -333,10 +359,71 @@ function parseRows(rows) {
       categories.push(category)
     }
     category.items.push(item)
+    headingJoined = false
   }
 
+  // A heading that is obviously unfinished: it ends mid-phrase, or opens a
+  // bracket it never closes. "Rice ( Non - Veg /" is not a section, it is the
+  // first line of one.
+  const looksUnfinished = (text) => {
+    const t = String(text).trim()
+    if (/[/&\-,+]$/.test(t)) return true
+    const opens = (t.match(/\(/g) || []).length
+    const closes = (t.match(/\)/g) || []).length
+    return opens > closes
+  }
+
+  // ...and the second line of one, which closes a bracket it never opened or
+  // starts with the joining character the first line ended on.
+  const looksLikeContinuation = (text) => {
+    const t = String(text).trim()
+    if (/^[/&\-,+]/.test(t)) return true
+    const opens = (t.match(/\(/g) || []).length
+    const closes = (t.match(/\)/g) || []).length
+    return closes > opens
+  }
+
+  // A heading printed on two lines is ordinary; one printed on eight is not.
+  // Without this, a run of dish names that lost their prices chained into a
+  // single category called "Fruit Milk Shake Apple Milk Shake Milk Shake ...".
+  let headingJoined = false
+  const MAX_HEADING_CHARS = 60
+
   const setCategory = (name) => {
-    currentCategory = name
+    const text = String(name).trim()
+
+    // A heading printed on two lines arrives as two rows. Only the last one
+    // used to survive, so "Rice ( Non - Veg /" then "Noodles)" filed 21 dishes
+    // under a category called "Noodles)". They are joined when the first line
+    // is unfinished, when the second is a continuation, or when the first
+    // collected no dishes at all - a real section always has some.
+    const previous = currentCategory
+    if (previous) {
+      const started = byName.get(previous)
+      const empty = !started || started.items.length === 0
+      // Zero dishes is the signal on its own. "Indian Masala" then
+      // "(Non-Veg)" carries no punctuation clue at all, and neither does
+      // "Special Non-Veg" then "Starters" - but a section that collected
+      // nothing before the next heading arrived was never a section.
+      const joinable = !headingJoined && `${previous} ${text}`.length <= MAX_HEADING_CHARS
+      if (joinable && (empty || looksUnfinished(previous) || looksLikeContinuation(text))) {
+        const joined = `${previous} ${text}`.replace(/\s*\/\s*/g, ' / ').replace(/\s{2,}/g, ' ').trim()
+        // Rename in place so dishes already filed under the partial name follow.
+        const existing = byName.get(previous)
+        if (existing) {
+          byName.delete(previous)
+          existing.name = joined
+          byName.set(joined, existing)
+        }
+        currentCategory = joined
+        headingJoined = true
+        portionLabels = []
+        return
+      }
+    }
+
+    currentCategory = text
+    headingJoined = false
     portionLabels = []
   }
 
@@ -406,6 +493,15 @@ function parseRows(rows) {
       working = working.slice(1)
     }
 
+    // A row holding nothing but a number is a price that lost its dish -
+    // usually because two names were printed with no gap and merged into one
+    // cell. It is not a dish and never can be, so it is counted and dropped
+    // rather than sent to review as something an admin could fix.
+    if (cells.length === 1 && /^[0-9,]{1,6}$/.test(cells[0])) {
+      orphanPrices += 1
+      continue
+    }
+
     if (working.length === 0 || !looksLikeName(working[0])) {
       if (cells.some(hasDigit)) unparsed.push(row)
       continue
@@ -425,10 +521,17 @@ function parseRows(rows) {
     // gap in the middle does not shift the remaining prices onto the wrong
     // labels - which would quietly sell a Full portion at the Half price.
     const values = []
+    const qualifiers = []
     let unreadableCell = false
 
     for (const cell of working.slice(1)) {
       if (NOT_SOLD.test(cell)) { values.push({ unsold: true }); continue }
+
+      // A short bracketed note between the name and the price belongs to the
+      // name: "Tandoori Chilly Chicken  (D)  250" is a dry one, not a row
+      // nobody can read. Only brackets, and only short ones, so a stray cell
+      // of real text still sends the row to review.
+      if (/^\([^()]{1,12}\)$/.test(cell)) { qualifiers.push(expandQualifier(cell)); continue }
 
       const single = priceOf(cell)
       if (single !== null) { values.push({ price: single }); continue }
@@ -454,6 +557,7 @@ function parseRows(rows) {
     // price away. A lone cell like "Pepper Barbeque Chicken 450 250 160" has
     // genuinely swallowed its prices and still needs splitting.
     let name = working[0]
+    if (qualifiers.length > 0) name = `${name} ${qualifiers.join(' ')}`.trim()
     if (values.length === 0 && !unreadableCell) {
       const split = splitNameAndPrices(working[0])
       name = split.name
@@ -528,7 +632,7 @@ function parseRows(rows) {
   return {
     categories,
     unparsed,
-    stats: { dishes, categories: categories.length, ambiguous, unparsed: unparsed.length },
+    stats: { dishes, categories: categories.length, ambiguous, orphanPrices, unparsed: unparsed.length },
   }
 }
 

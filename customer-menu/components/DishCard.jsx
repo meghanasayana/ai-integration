@@ -94,7 +94,20 @@ const DishCard = forwardRef(function DishCard(
   );
 
   const priceNum = Number(item.price) || 0;
-  const priceDisplay = `₹${priceNum.toFixed(0)}`;
+
+  // A dish sold in sizes shows the range, not just the cheapest one. Showing
+  // "180" for a dish whose Full portion is 510 is the kind of wrong a diner
+  // only finds out when the bill arrives.
+  const portions = Array.isArray(item.portions) ? item.portions : [];
+  const portionPrices = portions
+    .map((p) => Number(p.price))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+
+  const priceDisplay =
+    portionPrices.length > 1
+      ? `₹${portionPrices[0].toFixed(0)} – ₹${portionPrices[portionPrices.length - 1].toFixed(0)}`
+      : `₹${priceNum.toFixed(0)}`;
 
   const handleCardClick = (e) => {
     if (isUnavailable) return;
@@ -184,6 +197,18 @@ const DishCard = forwardRef(function DishCard(
       <div className="dish-info">
         <h3 className="dish-name">{item.name}</h3>
         <div className="dish-price">{priceDisplay}</div>
+        {portions.length > 1 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {portions.map((p) => (
+              <span
+                key={p.id || p.portion}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-[#f6f2eb]/80"
+              >
+                {p.portion} &#8377;{Number(p.price).toFixed(0)}
+              </span>
+            ))}
+          </div>
+        )}
 
         {item.description && (
           <p className="line-clamp-2 text-xs leading-relaxed text-slate-400 mb-2">

@@ -854,3 +854,110 @@ dish name that wraps is promoted to a heading and steals the dishes beneath it.
 
 The import has still never been watched saving to the database. Everything
 above is measured on parsing, the test suite, and the backend log.
+
+---
+
+# 25 October 2026, later — to zero unreadable rows
+
+## Horizontal bands: the six dishes that were "clearly printed"
+
+She said the juices were listed clearly and asked why they could not be read.
+She was right — all 20 juices read perfectly. The six missing dishes were the
+**Fruit Milk Shake** box at the bottom of page 12, which sits *across* the
+middle of the page while the boxes above it are side by side.
+
+`splitIntoBlocks` ran one vertical cut down the whole page, so it sliced that
+box in half: six names into the left block, six `90`s into the right. The
+names arrived with no price and the prices arrived with no name.
+
+**Fix:** `splitIntoBands` cuts a page at full-width horizontal whitespace
+first, then columns are found inside each band. A designed menu is boxes, not
+columns — the number of columns changes down the page and one line cannot be
+right for all of it. A band of fewer than three items is merged into the one
+below, so a heading sitting alone does not become its own region.
+
+**661 → 667 dishes, 8 → 2 unreadable rows.**
+
+## The last two rows
+
+`Tandoori Chilly Chicken | (D) | 250` — the `(D)` sat in its own cell and any
+non-price cell made the row unreadable. A short bracketed note now joins the
+name, and `(D)` is written out as `(Dry)`, `(G)` as `(Gravy)`. A bracket that
+is already a word — `(bone)`, `(5 Pcs)` — is left as printed, and a stray cell
+of real text still sends the row to review.
+
+`Fish Spl KababPrawn Spl Kabab | 250` followed by a lone `250` — two dish
+names printed with no gap, merged into one cell, second price orphaned.
+**Deliberately not fixed.** The obvious rule, splitting where a lowercase
+letter meets a capital, turns `PomoGranets Juice` into "Pomo Granets" and
+`SzechwanPanner Fried Rice` into nonsense. One row is not worth breaking
+three. The lone number is now counted as `orphanPrices` and dropped: a row
+holding nothing but a number is not a dish and never can be, so sending it to
+review pretends an admin could fix it.
+
+**668 dishes, 0 unreadable rows, 12 needing a decision.**
+
+## Limits and timeouts that would have failed silently
+
+- Commit capped at 500 entries; the menu parses to 668. Raised to 2000, and
+  the error now names the count and the limit.
+- The import transaction ran under Prisma's **5-second** default. 668 dishes
+  would never have finished; it would have failed with the transaction already
+  closed and told the admin only that nothing was saved. Raised to ten minutes,
+  still one transaction so a failure leaves the menu untouched. Found by
+  looking, not by her hitting it.
+
+## Portions now reach the diner
+
+`menu.controller.js` never sent `portions`, so a dish with Quarter 200, Half
+300 and Full 510 showed a diner ₹200 and nothing else. The public menu now
+includes available portions, and `DishCard` shows the range plus each size.
+This was in the old "not done" list and became urgent the moment the importer
+started creating portions.
+
+## Clearing the menu
+
+Asked for, and destructive, so it was built narrow. A link in the import
+dialog asks the server what is there, shows "Delete 668 dishes, 41 categories
+and 8 combos? This cannot be undone.", and only then clears. The restaurant
+comes from the session and never from the request, so no account can clear
+another's menu. One transaction, and what was removed is logged.
+
+## Unlabelled prices
+
+A control in the review screen: for a dish printed `280 / 320` with no label,
+you type what they mean, or click `Regular / Special`, `Half / Full`,
+`Small / Large`, and apply it to every dish in that section at once. The
+parser still refuses to guess. **Not** auto-filled — an edit to do that was
+started and withdrawn.
+
+## IMPORTANT — the live site is a different codebase
+
+A screenshot of the live Edit Dish form shows fields this project does not
+have:
+
+- **Pricing structure:** Single Fixed Price / Portions (1/4, 1/2, Full) /
+  Dry & Gravy Prices
+- **Dish classification:** Standard / Regular / Special / Seasonal /
+  **Both Options**, with separate Regular Price and Special Price and a
+  Special Badge Label
+
+`schema.prisma` here has none of those columns — the only match is
+`specialTags` — and `FoodItemForm.jsx` has a single Price field and a
+free-text Portion Size.
+
+So **the live site runs a newer version than `RENZA-restaurant`.** The three
+cases this importer flags map exactly onto those live options:
+
+```
+280 / 320        -> Both Options (Regular, Special)
+510 / 300 / 200  -> Portions (1/4, 1/2, Full)
+(D) / (G)        -> Dry & Gravy Prices
+```
+
+but the portions written here are the old `FoodItemPortion` model and will not
+fill the live columns. **Needed before any integration: the live project's
+`schema.prisma`, or at least its `FoodItem` model.** Guessing column names
+would produce an import that looks fine and writes nowhere.
+
+## Tests: 253 passing

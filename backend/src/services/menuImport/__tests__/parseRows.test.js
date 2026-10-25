@@ -536,3 +536,126 @@ test('sizes that do not match the number of prices are still flagged', () => {
   ])
   assert.strictEqual(result.stats.ambiguous, 1)
 })
+
+/* ---- category headings printed on two lines ---- */
+
+test('a heading split across two lines is joined, not replaced', () => {
+  // "Rice ( Non - Veg /" then "Noodles)" filed 21 dishes under "Noodles)".
+  const result = parseRows([
+    ['Rice ( Non - Veg /'],
+    ['Noodles)'],
+    ['Chicken Fried Rice', '170'],
+  ])
+  assert.strictEqual(result.categories[0].name, 'Rice ( Non - Veg / Noodles)')
+  assert.strictEqual(result.categories[0].items.length, 1)
+})
+
+test('a two-line heading with no punctuation clue is joined too', () => {
+  // The signal is that the first line collected no dishes at all.
+  const result = parseRows([
+    ['Special Non-Veg'],
+    ['Starters'],
+    ['Hong Khong Chicken', '240'],
+  ])
+  assert.strictEqual(result.categories[0].name, 'Special Non-Veg Starters')
+})
+
+test('two real sections in a row are not merged', () => {
+  const result = parseRows([
+    ['Soups'],
+    ['Tomato Soup', '140'],
+    ['Starters'],
+    ['Paneer 65', '180'],
+  ])
+  assert.deepStrictEqual(result.categories.map((c) => c.name), ['Soups', 'Starters'])
+})
+
+test('a heading is joined at most once', () => {
+  // A run of dish names that lost their prices once chained into a single
+  // category called "Fruit Milk Shake Apple Milk Shake Milk Shake ...".
+  const result = parseRows([
+    ['Kiwi Milk Shake'],
+    ['Mango Milk Shake'],
+    ['Pista Milk Shake'],
+    ['Milk Shakes'],
+    ['Oreo Milk Shake', '130'],
+  ])
+  for (const category of result.categories) {
+    assert.ok(category.name.length <= 60, `heading too long: ${category.name}`)
+  }
+})
+
+/* ---- a price printed hard against the name ---- */
+
+test('a price with no space before it is still read', () => {
+  const result = parseRows([
+    ['Rice'],
+    ['Szechwan Sea Food F. Rice / Noodles240'],
+  ])
+  const item = result.categories[0].items[0]
+  assert.strictEqual(item.name, 'Szechwan Sea Food F. Rice / Noodles')
+  assert.strictEqual(item.price, '240')
+})
+
+test('a name that genuinely ends in a number is left alone', () => {
+  // "Fish-65" and "Chicken - 65 (Boneless)" are dish names, not prices.
+  assert.strictEqual(splitNameAndPrices('Fish-65').name, 'Fish-65')
+  assert.strictEqual(splitNameAndPrices('Chicken - 65 (Boneless)').name, 'Chicken - 65 (Boneless)')
+})
+
+test('slash-separated prices after the name are split', () => {
+  const split = splitNameAndPrices('Pepper Barbeque Chicken (F/H/Q) 510/300/200')
+  assert.strictEqual(split.name, 'Pepper Barbeque Chicken (F/H/Q)')
+  assert.deepStrictEqual(split.prices, ['510', '300', '200'])
+})
+
+test('a short bracketed note between name and price joins the name', () => {
+  // "Tandoori Chilly Chicken  (D)  250" - (D) is Dry, not an unreadable cell.
+  const result = parseRows([
+    ['Starters'],
+    ['Tandoori Chilly Chicken', '(D)', '250'],
+  ])
+  const item = result.categories[0].items[0]
+  // (D) is written out by the rule below; the point here is that the row is
+  // read at all rather than sent to review.
+  assert.strictEqual(item.name, 'Tandoori Chilly Chicken (Dry)')
+  assert.strictEqual(item.price, '250')
+  assert.strictEqual(result.unparsed.length, 0)
+})
+
+test('a stray cell of real text still sends the row to review', () => {
+  const result = parseRows([
+    ['Starters'],
+    ['Odd Dish', 'some text', '200'],
+  ])
+  assert.strictEqual(result.unparsed.length, 1)
+})
+
+test('(D) is written out as Dry', () => {
+  const result = parseRows([
+    ['Starters'],
+    ['Tandoori Chilly Chicken', '(D)', '250'],
+  ])
+  assert.strictEqual(result.categories[0].items[0].name, 'Tandoori Chilly Chicken (Dry)')
+})
+
+test('a bracketed note that is already a word is left as printed', () => {
+  const result = parseRows([
+    ['Starters'],
+    ['Chicken 65', '(bone)', '240'],
+  ])
+  assert.strictEqual(result.categories[0].items[0].name, 'Chicken 65 (bone)')
+})
+
+test('a row holding only a number is counted and dropped, not sent to review', () => {
+  // Two dish names printed with no gap merge into one cell and the second
+  // price is orphaned. A lone number is not a dish and never can be.
+  const result = parseRows([
+    ['Kabab'],
+    ['Fish Spl KababPrawn Spl Kabab', '250'],
+    ['250'],
+  ])
+  assert.strictEqual(result.unparsed.length, 0)
+  assert.strictEqual(result.stats.orphanPrices, 1)
+  assert.strictEqual(result.stats.dishes, 1)
+})
