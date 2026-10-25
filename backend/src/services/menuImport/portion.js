@@ -30,6 +30,16 @@ for (const [canonical, aliases] of Object.entries(CANONICAL)) {
 
 const PIECE_PATTERN = /^(\d+)\s*(?:pcs?|pieces?|pc)$/i
 
+// Menus abbreviate the sizes into the dish name: "Tandoori Chicken (F/H/Q)".
+// Only letters that mean a portion are accepted, so a dish written "(B/L)"
+// for bone and boneless is left alone rather than invented into sizes.
+const LETTER_TO_CANONICAL = {
+  f: 'full', h: 'half', q: 'quarter',
+  s: 'small', m: 'medium', l: 'large',
+}
+
+const NAME_LABELS_RE = /\s*\(\s*([A-Za-z]{1,6}(?:\s*\/\s*[A-Za-z]{1,6}){0,3})\s*\)\s*$/
+
 /**
  * @param {string} raw label as printed on the menu
  * @returns {{ok: false, reason: string} | {ok: true, canonical: string, label: string, recognised: boolean}}
@@ -70,6 +80,44 @@ function normalisePortion(raw) {
   }
 }
 
+/**
+ * Portion labels printed inside the dish name, as "(F/H/Q)" or "(Full/Half)".
+ *
+ * Returns the name without them and the labels in printed order, or null when
+ * the brackets hold something else. Every part has to be a portion for the
+ * whole thing to count: half a match is a guess, and a guess here sells a
+ * full plate at the quarter price.
+ *
+ * @returns {{base: string, labels: string[]} | null}
+ */
+function labelsFromName(name) {
+  const text = String(name ?? '')
+  const match = text.match(NAME_LABELS_RE)
+  if (!match) return null
+
+  const parts = match[1].split('/').map((part) => part.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+
+  const labels = []
+  for (const part of parts) {
+    const key = part.toLowerCase().replace(/[.]/g, '')
+    const canonical = key.length === 1
+      ? LETTER_TO_CANONICAL[key]
+      : ALIAS_TO_CANONICAL.get(key)
+
+    if (!canonical) return null
+    labels.push(titleCase(canonical))
+  }
+
+  // The same size twice is a misread, not a menu.
+  if (new Set(labels).size !== labels.length) return null
+
+  const base = text.slice(0, match.index).trim()
+  if (!base) return null
+
+  return { base, labels }
+}
+
 function titleCase(value) {
   return value
     .split(/[\s_]+/)
@@ -92,4 +140,4 @@ function findDuplicatePortions(canonicalLabels) {
   return [...duplicates]
 }
 
-module.exports = { normalisePortion, findDuplicatePortions, CANONICAL }
+module.exports = { normalisePortion, findDuplicatePortions, labelsFromName, CANONICAL }

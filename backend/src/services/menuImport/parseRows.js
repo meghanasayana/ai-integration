@@ -1,5 +1,7 @@
 'use strict'
 
+const { labelsFromName } = require('./portion')
+
 const { editDistance } = require('./dishName')
 
 /**
@@ -491,6 +493,22 @@ function parseRows(rows) {
         name,
         portions: portionLabels.map((label, i) => ({ label, price: priced[i].price })),
       })
+      continue
+    }
+
+    // Sizes printed inside the name: "Piri Piri Tandoori Chi. (F/H/Q)" beside
+    // 510/300/200 is one dish in three sizes, not three prices nobody can
+    // explain. The label has to be there in the name - this never guesses.
+    const inName = labelsFromName(name)
+    if (inName && inName.labels.length === priced.length) {
+      addItem(
+        priced.length === 1
+          ? { name: inName.base, price: priced[0].price }
+          : {
+              name: inName.base,
+              portions: inName.labels.map((label, i) => ({ label, price: priced[i].price })),
+            },
+      )
       continue
     }
 

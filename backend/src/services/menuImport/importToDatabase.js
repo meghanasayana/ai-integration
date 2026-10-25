@@ -48,6 +48,12 @@ async function importToDatabase({ prisma, restaurantId, entries }) {
 
   const report = emptyReport()
 
+  // One transaction for the whole menu, so a failure half way leaves the menu
+  // exactly as it was. Prisma closes an interactive transaction after five
+  // seconds by default, which is nowhere near enough: a 13-page menu is 650
+  // dishes, each needing its category looked up, the dish matched, and its
+  // portions written. The import then failed with the transaction already
+  // closed and the admin was told only that nothing was saved.
   await prisma.$transaction(async (tx) => {
     for (const entry of entries) {
       const categoryId = await ensureCategory(tx, {
@@ -116,6 +122,9 @@ async function importToDatabase({ prisma, restaurantId, entries }) {
       }
       report.updated.push({ id: existing.id, name: existing.name })
     }
+  }, {
+    maxWait: 15000,
+    timeout: 10 * 60 * 1000,
   })
 
   return report

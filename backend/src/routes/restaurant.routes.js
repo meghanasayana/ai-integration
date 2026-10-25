@@ -1,6 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const restaurantController = require('../controllers/restaurant.controller')
+const comboController = require('../controllers/combo.controller')
 const { authenticate, requireRestaurantAdmin } = require('../middleware/auth')
 const { uploadSingle } = require('../middleware/upload')
 
@@ -28,5 +29,13 @@ router.post('/foods', uploadSingle, restaurantController.createFood)
 router.put('/foods/:id', uploadSingle, restaurantController.updateFood)
 router.delete('/foods/:id', restaurantController.deleteFood)
 router.patch('/foods/:id/availability', restaurantController.toggleAvailability)
+
+// Combos
+router.get('/combos', comboController.listCombos)
+router.get('/combos/:id', comboController.getCombo)
+router.post('/combos', comboController.createCombo)
+router.put('/combos/:id', comboController.updateCombo)
+router.delete('/combos/:id', comboController.deleteCombo)
+router.patch('/combos/:id/availability', comboController.toggleAvailability)
 
 module.exports = router

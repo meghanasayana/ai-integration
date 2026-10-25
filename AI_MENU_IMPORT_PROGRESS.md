@@ -701,3 +701,156 @@ adminAssistant 32
    nothing connected.
 3. Automatic dish photos - scoring built and tested, nothing wired.
 4. Nothing deployed. Live site and production database untouched.
+
+---
+
+# 24–25 October 2026 — combos, and why 154 dishes were missing
+
+## Combos
+
+Asked for after a page of the Taj menu turned out to be eight combo boxes:
+one price for a set of items, with some lines offering a choice.
+
+**Decided first, before any code:** the menu only displays — there is no
+ordering anywhere in the schema — so a combo needs no cart and no option
+state. The card shows the choices and the diner tells the waiter. Combos get
+their own section rather than sitting among the dish categories.
+
+**Lines are stored exactly as printed.** The tempting thing is to split on
+slashes, but `Veg/Panner/Mushroom/BabyCorn/Gobi Fried Rice/Noodles` is not six
+options: it is five fillings times two bases, ten plates. A naive split
+produces "Gobi Fried Rice" and a stray "Noodles". Printing what the menu
+prints is never wrong.
+
+**New files:** `comboBlocks.js` (parsing one box), `comboBoxes.js` (finding
+the boxes by position), `comboExtract.js` (a pass over the file),
+`services/combos/validate.js` and `importCombos.js`, `combo.controller.js`,
+`components/ComboCard.jsx`.
+
+### Three things that bit, in order
+
+1. **Flat text merges the grid.** A combo page is two boxes across and four
+   down, so plain extraction puts "Combo - 1" and "Combo - 2" on one line and
+   neither is recognised. Fixed by finding each title's x/y and letting it
+   claim the lines below it in its own column.
+
+2. **The dish parser ate the combo page.** First real upload produced a dish
+   called "Combo" priced at 8 — from "Combo - 8" — and the items inside the
+   boxes scattered across the review list. The combo pass now runs *first* and
+   reports which pages it claimed; those pages are removed before the dish
+   parser sees them. A page belongs to one or the other, never both.
+
+3. **I fixed the PDF path and she was uploading a photo.** The tell was in her
+   own paste: "Mugual i!" and "Corindar Chicken (0)" are OCR misreads, which
+   the PDF text path cannot produce. The combo pass existed only in the PDF
+   branch. Now wired to OCR as well, which reports word positions already.
+   Two further photo-only problems appeared: the page heading "Special Combo
+   Taj" became a ninth empty box called "Combo", and Combo 4's number was read
+   onto the next line so the title came out as plain "Combo". Both handled —
+   a numberless title is dropped when the page numbers its combos, and a
+   leading bare number is absorbed back into the title.
+
+**Honest limit of the photo path:** on this menu it reads all eight combos and
+not one price. The prices sit inside decorative orange circles and OCR returns
+nothing from them. It also garbles items — "Rytha Gra", "Altam", and Combo 3
+loses "Rice/Noodles". The PDF gives all eight with every price. Use the PDF.
+
+## The 154 missing dishes
+
+She uploaded the full menu and ~130 entries came back needing review, most of
+them saying "No price could be read" for dishes that plainly had prices. The
+backend log settled it:
+
+```
+parsed directly: 501 dishes in 34 categories, 28 to review, 91 for the model
+91 unreadable row(s) sent to the review list rather than the model
+```
+
+85 of those 91 rows looked like this:
+
+```
+Cream of Tomato Soup | 140 | Cream of Mutton Soup | 170
+Prawn - 65           | 240 | Nawabi Panner Masala | 210
+```
+
+Two columns merged into one row. Two bugs in `pdfLayout.js`, both general:
+
+1. **Only the widest gaps were tried.** `splitIntoBlocks` ranked gutters by
+   width and tried the widest first, then the widest two. On a menu row the
+   gap between a dish name and its price is routinely wider than the gap
+   between the two columns — page 7 offered a 62pt gap at x=207 (name to
+   price) and a 40pt gap at x=286 (the real divider). The wide one was tried,
+   correctly rejected because it leaves a block with no prices in it, and the
+   narrow one was never tried on its own at all. Now every gutter is tried
+   alone before any combination. **501 → 600 dishes.**
+
+2. **One wide item closed the gutter.** `findGutters` marked a band covered if
+   any item crossed it, so a heading printed across the page — or one dish
+   name longer than its column — merged both columns. It now tolerates
+   crossings by up to 5% of the page's items. Swept 3/5/6/8%: 5% is where it
+   plateaus. **600 → 655 dishes, unparsed 39 → 14.**
+
+Three tests added for the patterns rather than for this file: a name-to-price
+gap wider than the gutter, a heading spanning both columns, and a genuinely
+single-column page that must be left alone.
+
+## Sizes written into the dish name
+
+28 dishes were flagged "two or more prices with no portion labels" — mostly
+`Piri Piri Tandoori Chi. (F/H/Q)` against `510/300/200`. The label was in the
+name all along. `labelsFromName` in `portion.js` reads `(F/H/Q)`, `(F/H)`,
+`(S/M/L)` and `(Full/Half)`, and refuses anything where a part is not a size:
+`(B/L)` is bone and boneless, `(5 Pcs)` is a quantity, `(F/F)` is a misread.
+17 dishes now import with real Full/Half/Quarter portions. **Ambiguous 28 → 11.**
+
+The 11 that remain were checked against the printed page by eye. `Handi
+parotta spl · Chicken · 280/320` has no label anywhere on page 2. The parser
+is right to refuse; only the restaurant can say.
+
+## Limits that were quietly wrong
+
+- Upload capped at 15MB. The menu is 22.2MB. Raised to 30MB — in both the
+  backend and the admin page, which had its own copy of the number and would
+  have rejected the file before it left the browser.
+- Commit capped at 500 entries. The menu parses to 655. Raised to 2000, and
+  the error now names the count and the limit instead of saying "too many".
+- The import transaction ran under Prisma's **5-second** default and could
+  never have finished 655 dishes; it would have failed with the transaction
+  already closed and told the admin only that nothing was saved. Raised to ten
+  minutes, still a single transaction so a failure leaves the menu untouched.
+  Found by looking rather than by her hitting it.
+
+## Tests: 238 passing
+
+combos validate 20 · comboBlocks 24 · comboBoxes 9 · parseRows 40 ·
+pdfLayout 12 · and the rest unchanged.
+
+## KNOWN BROKEN — category headings printed on two lines
+
+Confirmed with a full category dump, not yet fixed:
+
+```
+  14  Veg Soup                    <- should be about 18
+   2  Hot & Sour Veg /Mushroom /  <- a dish name read as a category heading
+  21  Noodles)                    <- tail of "Rice ( Non - Veg / Noodles)"
+  44  (Non-Veg)                   <- tail of "Indian Masala (Non-Veg)"
+  21  Starters                    <- tail of "Special Non-Veg Starters"
+   8  Gobi     4  Baby Corn       <- fragments of one heading
+  10  Special
+```
+
+Only the last line of a wrapped heading becomes the category name, and a long
+dish name that wraps is promoted to a heading and steals the dishes beneath it.
+
+**Agreed next, in this order:**
+
+1. Join wrapped headings, and stop a wrapping dish name becoming one. That
+   alone should fix six of the broken categories.
+2. Review in two stages — the categories found, with counts, then the dishes
+   under each. A flat list of 655 dishes hides a category holding the wrong
+   number; a list of 40 categories does not.
+
+## Not verified
+
+The import has still never been watched saving to the database. Everything
+above is measured on parsing, the test suite, and the backend log.

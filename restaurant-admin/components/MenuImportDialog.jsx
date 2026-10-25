@@ -14,7 +14,7 @@ import toast from 'react-hot-toast';
 import { cn } from '@/lib/utils';
 
 const ACCEPTED = '.jpg,.jpeg,.png,.webp,.pdf';
-const MAX_MB = 15;
+const MAX_MB = 30;   // must match MAX_FILE_BYTES in backend fileSupport.js
 
 /**
  * Two-step menu import: extract, then confirm.
@@ -36,12 +36,16 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
   const [selected, setSelected] = useState({});     // index -> boolean
   const [prices, setPrices] = useState({});         // index -> corrected price string
   const [report, setReport] = useState(null);
+  const [combos, setCombos] = useState([]);        // combo boxes found in the file
+  const [comboPicked, setComboPicked] = useState({});  // index -> boolean
+  const [comboPrices, setComboPrices] = useState({});  // index -> typed-in price
   const inputRef = useRef(null);
 
   const reset = useCallback(() => {
     setStage('pick'); setFile(null); setError(null); setPlan(null);
     setMeta(null); setSelected({}); setPrices({}); setReport(null);
     setMode('file'); setPastedText(''); setListFilter('all');
+    setCombos([]); setComboPicked({}); setComboPrices({});
   }, []);
 
   const close = (next) => {
@@ -76,6 +80,15 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
       const initial = {};
       extracted.entries.forEach((entry, i) => { initial[i] = entry.status === 'ready'; });
       setSelected(initial);
+
+      // Combos found in the same file. A combo whose price could not be read
+      // starts unticked, so nothing is saved at a guessed price.
+      const found = res.data.combos ?? [];
+      setCombos(found);
+      const comboInitial = {};
+      found.forEach((combo, i) => { comboInitial[i] = !combo.needsReview; });
+      setComboPicked(comboInitial);
+
       setStage('review');
     } catch (err) {
       // Show what actually failed. This used to collapse every failure into
@@ -125,6 +138,15 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
       const initial = {};
       extracted.entries.forEach((entry, i) => { initial[i] = entry.status === 'ready'; });
       setSelected(initial);
+
+      // Combos found in the same file. A combo whose price could not be read
+      // starts unticked, so nothing is saved at a guessed price.
+      const found = res.data.combos ?? [];
+      setCombos(found);
+      const comboInitial = {};
+      found.forEach((combo, i) => { comboInitial[i] = !combo.needsReview; });
+      setComboPicked(comboInitial);
+
       setStage('review');
     } catch (err) {
       const served = err.response?.data?.error;
@@ -160,19 +182,40 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
       }));
   };
 
+  const chosenCombos = () =>
+    combos
+      .map((combo, i) => ({ combo, i }))
+      .filter(({ i }) => comboPicked[i])
+      .map(({ combo, i }) => ({
+        name: combo.name,
+        price: comboPrices[i] !== undefined && comboPrices[i] !== '' ? comboPrices[i] : combo.price,
+        lines: combo.lines,
+        isVeg: combo.isVeg,
+        sortOrder: combo.sortOrder,
+      }))
+      .filter((combo) => combo.price !== null && combo.price !== undefined && combo.price !== '');
+
   const handleImport = async () => {
     const entries = chosenEntries();
-    if (entries.length === 0) {
+    const pickedCombos = chosenCombos();
+
+    if (entries.length === 0 && pickedCombos.length === 0) {
       toast.error('Nothing is selected to import.');
       return;
     }
 
     setStage('saving');
     try {
-      const res = await api.post('/api/restaurant/menu-import/commit', { entries });
+      const res = await api.post('/api/restaurant/menu-import/commit', {
+        entries,
+        combos: pickedCombos,
+      });
       setReport(res.data.summary);
       setStage('done');
-      toast.success(`${res.data.summary.created} added, ${res.data.summary.updated} updated`);
+
+      const added = res.data.summary.created + (res.data.summary.combosCreated ?? 0);
+      const changed = res.data.summary.updated + (res.data.summary.combosUpdated ?? 0);
+      toast.success(`${added} added, ${changed} updated`);
       onImported?.();
     } catch (err) {
       setError(err.response?.data?.error || 'The import could not be saved.');
@@ -386,7 +429,107 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
             </div>
 
             <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-2 mt-1">
-              {visibleEntries.length === 0 && (
+              {/* Combos are their own kind of thing: one price for a set of
+                  items, where a line may offer a choice. They go to the
+                  combos section of the menu, not into a dish category. */}
+              {combos.length > 0 && (
+                <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-violet-700">
+                      {combos.length} combo{combos.length === 1 ? '' : 's'} found
+                    </p>
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-violet-700 hover:underline"
+                      onClick={() => {
+                        const allOn = combos.every((_, i) => comboPicked[i]);
+                        const next = {};
+                        combos.forEach((_, i) => { next[i] = !allOn; });
+                        setComboPicked(next);
+                      }}
+                    >
+                      {combos.every((_, i) => comboPicked[i]) ? 'Clear all' : 'Select all'}
+                    </button>
+                  </div>
+
+                  {combos.map((combo, i) => {
+                    const typed = comboPrices[i];
+                    const needsPrice = combo.price === null || combo.price === undefined;
+
+                    return (
+                      <div
+                        key={`combo-${combo.name}-${i}`}
+                        className="rounded-lg border border-violet-200 bg-white p-2.5 flex gap-3"
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-1 w-4 h-4 accent-violet-600 flex-shrink-0"
+                          checked={!!comboPicked[i]}
+                          aria-label={`Import ${combo.name}`}
+                          onChange={(e) =>
+                            setComboPicked((picked) => ({ ...picked, [i]: e.target.checked }))
+                          }
+                        />
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <p className="font-semibold text-sm text-slate-900 truncate">
+                              {combo.name}
+                            </p>
+                            {needsPrice ? (
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                placeholder="price"
+                                value={typed ?? ''}
+                                onChange={(e) =>
+                                  setComboPrices((prev) => ({ ...prev, [i]: e.target.value }))
+                                }
+                                className="w-20 rounded border border-amber-300 px-1.5 py-0.5 text-sm text-right"
+                              />
+                            ) : (
+                              <span className="text-sm font-bold text-slate-700">
+                                &#8377;{combo.price}
+                              </span>
+                            )}
+                          </div>
+
+                          <ul className="mt-1 space-y-0.5">
+                            {combo.lines.map((line, n) => (
+                              <li key={n} className="text-xs text-slate-600">
+                                &bull; {line}
+                              </li>
+                            ))}
+                          </ul>
+
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={cn(
+                                'px-1.5 py-0.5 rounded text-[10px] font-bold',
+                                combo.isVeg
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-rose-100 text-rose-700',
+                              )}
+                            >
+                              {combo.isVeg ? 'VEG' : 'NON-VEG'}
+                            </span>
+                            {combo.page && (
+                              <span className="text-[10px] text-slate-400">page {combo.page}</span>
+                            )}
+                            {combo.reason && (
+                              <span className="text-[10px] font-semibold text-amber-700">
+                                {combo.reason}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {visibleEntries.length === 0 && combos.length === 0 && (
                 <p className="py-8 text-center text-xs text-slate-500">
                   Nothing in this view.
                 </p>
@@ -475,6 +618,9 @@ export default function MenuImportDialog({ open, onOpenChange, onImported }) {
               <Stat label="unchanged" value={report.unchanged} tone="slate" />
               {report.categoriesCreated > 0 && <Stat label="new categories" value={report.categoriesCreated} tone="violet" />}
               {report.portionsCreated > 0 && <Stat label="portions added" value={report.portionsCreated} tone="amber" />}
+              {report.combosCreated > 0 && <Stat label="combos added" value={report.combosCreated} tone="violet" />}
+              {report.combosUpdated > 0 && <Stat label="combos updated" value={report.combosUpdated} tone="sky" />}
+              {report.combosRejected > 0 && <Stat label="combos skipped" value={report.combosRejected} tone="amber" />}
             </div>
           </div>
         )}

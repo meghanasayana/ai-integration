@@ -55,6 +55,7 @@ model Restaurant {
   categories            Category[]
   foodItems             FoodItem[]
   analytics             AnalyticsEvent[]
+  combos                Combo[]
   createdAt             DateTime         @default(now()) @map("created_at")
 
   @@map("restaurants")
@@ -133,4 +134,50 @@ model AnalyticsEvent {
   createdAt    DateTime   @default(now()) @map("created_at")
 
   @@map("analytics_events")
+}
+
+// ---------------------------------------------------------------------------
+// Combos — a fixed-price set of items, where some lines are a choice
+// ("Chicken Biriyani / Mugual Biriyani / Chicken 65 Biriyani").
+// ---------------------------------------------------------------------------
+
+model Combo {
+  id           String     @id @default(cuid())
+  restaurantId String     @map("restaurant_id")
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  name        String
+  price       Decimal @db.Decimal(10, 2)
+  description String?
+  imageUrl    String? @map("image_url")
+
+  isVeg       Boolean @default(false) @map("is_veg")
+  isAvailable Boolean @default(true) @map("is_available")
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  lines ComboLine[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([restaurantId, sortOrder])
+  @@map("combos")
+}
+
+/// One line of a combo. `options` holds the choices on that line: a single
+/// entry is a fixed inclusion ("Fresh Lime Juice"), several are alternatives
+/// the diner picks between. `note` carries a quantity such as "2 pcs".
+model ComboLine {
+  id      String @id @default(cuid())
+  comboId String @map("combo_id")
+  combo   Combo  @relation(fields: [comboId], references: [id], onDelete: Cascade)
+
+  options   String[]
+  note      String?
+  sortOrder Int      @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([comboId, sortOrder])
+  @@map("combo_lines")
 }

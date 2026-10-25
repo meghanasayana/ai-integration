@@ -33,6 +33,7 @@ const { mergeCategories } = require('./mergePages')
 const { verifyCoverage, rowsNotRepresented } = require('./verifyCoverage')
 const { parseRows, splitNameAndPrices } = require('./parseRows')
 const { extractImageRows, OcrError } = require('./imageOcr')
+const { extractCombosFromPdf, combosFromItems, asPlan: combosAsPlan } = require('./comboExtract')
 
 /** Longest pasted menu accepted. Keeps one request small enough to stay quick. */
 const MAX_PASTE_CHARS = 8000
@@ -196,16 +197,42 @@ async function readImageByOcr(buffer, options) {
     return null
   }
 
+  // Combos first, for the same reason as the PDF path: a photographed combo
+  // page run through the dish parser turns "Combo - 8" into a dish costing 8.
+  let combos = []
+  try {
+    combos = combosAsPlan(combosFromItems(ocr.items || [], ocr.pageWidth))
+  } catch (err) {
+    console.warn('[menuImport] combo pass on the photo failed:', err.message)
+  }
+
+  // Two or more boxes means the whole picture is a combo page, so there are no
+  // dishes on it to find. One alone is more likely a heading that happens to
+  // read as a title, so the dish parser still gets its turn.
+  if (combos.length >= 2) {
+    console.log(
+      `[menuImport] image read by OCR: ${ocr.words} words -> ` +
+        `${combos.length} combos, no dish parsing (whole page is combos)`,
+    )
+    return {
+      categories: [],
+      failures: [],
+      combos,
+      stats: { words: ocr.words, ocrConfidence: ocr.confidence, dishes: 0, ambiguous: 0, unparsed: 0 },
+    }
+  }
+
   const parsed = parseRows(ocr.rows)
   console.log(
     `[menuImport] image read by OCR: ${ocr.words} words, confidence ` +
       `${ocr.confidence === null ? '?' : Math.round(ocr.confidence)} -> ` +
-      `${parsed.stats.dishes} dishes, ${parsed.stats.unparsed} unreadable`,
+      `${parsed.stats.dishes} dishes, ${parsed.stats.unparsed} unreadable` +
+      `${combos.length > 0 ? `, ${combos.length} combo` : ''}`,
   )
 
-  // No dishes at all means OCR read something but not a menu, so the vision
-  // model deserves its turn.
-  if (parsed.stats.dishes === 0) return null
+  // No dishes and no combos means OCR read something but not a menu, so the
+  // vision model deserves its turn.
+  if (parsed.stats.dishes === 0 && combos.length === 0) return null
 
   const lists = [parsed.categories]
   let failures = []
@@ -221,6 +248,7 @@ async function readImageByOcr(buffer, options) {
   return {
     categories: mergeCategories(lists),
     failures,
+    combos,
     stats: {
       words: ocr.words,
       ocrConfidence: ocr.confidence,
@@ -298,6 +326,8 @@ async function extractMenuPlan(file, options = {}) {
   let model
   let source = {}
   let partial = null
+  let comboPlan = []
+  let comboPages = new Set()
 
   try {
     if (classification.kind === 'image') {
@@ -309,6 +339,7 @@ async function extractMenuPlan(file, options = {}) {
 
       if (fromOcr) {
         categories = fromOcr.categories
+        comboPlan = fromOcr.combos || []
         partial = fromOcr.failures.length > 0 ? fromOcr.failures : null
         source = { kind: 'image', mode: 'ocr', ...fromOcr.stats }
       } else {
@@ -326,6 +357,24 @@ async function extractMenuPlan(file, options = {}) {
         source = { kind: 'image', mode: 'vision' }
       }
     } else {
+      // Combos are read first so the dish parser can be told to leave their
+      // pages alone. A combo page run through the dish parser produces
+      // nonsense: "Combo - 8" becomes a dish called "Combo" costing 8, and
+      // the items inside each box scatter into the review list.
+      try {
+        const found = await extractCombosFromPdf(file.buffer)
+        comboPlan = combosAsPlan(found.combos)
+        comboPages = new Set(found.pagesWithCombos)
+        if (comboPlan.length > 0) {
+          console.log(
+            `[menuImport] ${comboPlan.length} combo(s) found on page(s) ` +
+              `${found.pagesWithCombos.join(', ')} - those pages are not read for dishes`,
+          )
+        }
+      } catch (err) {
+        console.warn('[menuImport] combo pass failed, dishes unaffected:', err.message)
+      }
+
       const content = await extractPdfContent(file.buffer)
       console.log(
         `[menuImport] pdf read as ${content.mode}` +
@@ -335,9 +384,14 @@ async function extractMenuPlan(file, options = {}) {
             : ''),
       )
 
+      // A page belongs to one or the other, never both.
+      const dishContent = comboPages.size > 0 && Array.isArray(content.pagesText)
+        ? { ...content, pagesText: content.pagesText.filter((page) => !comboPages.has(page.num)) }
+        : content
+
       const fromRows =
-        content.mode === 'rows' && Array.isArray(content.pagesText)
-          ? await readPdfRows(content, options)
+        dishContent.mode === 'rows' && Array.isArray(dishContent.pagesText)
+          ? await readPdfRows(dishContent, options)
           : null
 
       if (fromRows) {
@@ -388,6 +442,7 @@ async function extractMenuPlan(file, options = {}) {
   return {
     ok: true,
     plan: buildImportPlan(categories),
+    combos: comboPlan,
     // Rows that could not be read are reported, not hidden: an import that
     // silently covers part of a menu looks complete and is not.
     partial,

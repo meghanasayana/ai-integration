@@ -183,15 +183,28 @@ function splitIntoBlocks (items, pageWidth) {
 
   let best = { blocks: [items], score: interleaveScore(groupIntoRows(items)) }
 
-  for (let count = 1; count <= Math.min(MAX_BLOCKS - 1, ranked.length); count += 1) {
-    const boundaries = ranked.slice(0, count).map((g) => g.centre).sort((a, b) => a - b)
+  /** Try one set of boundaries; keep it if it reads better than what we have. */
+  const consider = (boundaries) => {
     const blocks = partitionByBoundaries(items, boundaries)
-
-    if (blocks.some((block) => block.length === 0)) continue
-    if (!blocksLookIndependent(blocks)) continue
+    if (blocks.some((block) => block.length === 0)) return
+    if (!blocksLookIndependent(blocks)) return
 
     const score = blocks.reduce((sum, b) => sum + interleaveScore(groupIntoRows(b)), 0)
     if (score < best.score) best = { blocks, score }
+  }
+
+  // Every gutter on its own, not just the widest.
+  //
+  // The gap between a dish name and its price is often wider than the gap
+  // between two columns of a menu. Taking the widest first and stopping there
+  // split names away from their prices, which is correctly rejected - and the
+  // real column gutter, being narrower, was never tried at all. Two columns
+  // then merged into one row and 85 dishes on a 13-page menu lost their price.
+  for (const gutter of ranked) consider([gutter.centre])
+
+  // Then combinations, widest first, for pages with three columns.
+  for (let count = 2; count <= Math.min(MAX_BLOCKS - 1, ranked.length); count += 1) {
+    consider(ranked.slice(0, count).map((g) => g.centre).sort((a, b) => a - b))
   }
 
   return best.blocks
@@ -200,14 +213,21 @@ function splitIntoBlocks (items, pageWidth) {
 /** Vertical bands of the page width that no text crosses. */
 function findGutters (items, pageWidth) {
   const buckets = Math.max(1, Math.ceil(pageWidth / SCAN_BUCKET))
-  const covered = new Array(buckets).fill(false)
+  const crossings = new Array(buckets).fill(0)
 
   for (const item of items) {
     const width = item.width != null ? item.width : item.text.length * item.height * 0.5
     const from = Math.max(0, Math.floor(item.x / SCAN_BUCKET))
     const to = Math.min(buckets - 1, Math.ceil((item.x + width) / SCAN_BUCKET))
-    for (let i = from; i <= to; i += 1) covered[i] = true
+    for (let i = from; i <= to; i += 1) crossings[i] += 1
   }
+
+  // A few items may cross the gap without meaning the columns are joined: a
+  // heading printed across the page, or one dish name longer than its column.
+  // Requiring an absolutely untouched band threw away the real gutter on a
+  // page of soups and merged both columns into single rows.
+  const tolerance = Math.max(1, Math.round(items.length * 0.05))
+  const covered = crossings.map((count) => count > tolerance)
 
   const gutters = []
   let runStart = null
@@ -380,6 +400,7 @@ function median (numbers) {
 }
 
 module.exports = {
+  loadPdfjs,
   extractRows,
   groupIntoRows,
   splitIntoBlocks,

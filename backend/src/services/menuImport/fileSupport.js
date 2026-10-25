@@ -8,7 +8,11 @@
  * behaviour for every other upload in the app.
  */
 
-const MAX_FILE_BYTES = 15 * 1024 * 1024 // 15MB
+// 30MB. A designed restaurant menu is mostly photographs, and the Taj menu
+// alone is 22MB across 13 pages, so 15MB turned away a perfectly ordinary file.
+// The upload is held in memory and discarded after one read, so the cost of a
+// larger file is a brief spike, not disk.
+const MAX_FILE_BYTES = 30 * 1024 * 1024 // 30MB
 const MAX_PDF_PAGES = 20
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])

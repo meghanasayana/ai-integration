@@ -157,3 +157,59 @@ test('a wide name-to-price gap is not mistaken for two sections', () => {
     'every row must keep its name and its price together: ' + JSON.stringify(rows),
   )
 })
+
+/* ---- column splitting, after a 13-page menu lost 154 dishes to it ---- */
+
+/** A text item as pdfjs reports one. */
+const at = (text, x, y, width, height = 10) => ({ text, x, y, height, width })
+
+test('the column gutter wins even when the name-to-price gap is wider', () => {
+  // Left names end at 60, their prices start at 150: a 90pt gap.
+  // The real column gutter, 170 to 200, is only 30pt wide.
+  // Taking the widest gap first splits names from prices, which is wrong.
+  const items = []
+  for (let i = 0; i < 8; i += 1) {
+    const y = 700 - i * 20
+    items.push(at(`Left Dish ${i}`, 10, y, 50))
+    items.push(at(`${100 + i}`, 150, y, 20))
+    items.push(at(`Right Dish ${i}`, 200, y, 60))
+    items.push(at(`${200 + i}`, 300, y, 20))
+  }
+
+  const blocks = splitIntoBlocks(items, 400)
+  assert.strictEqual(blocks.length, 2, 'should split into two columns')
+
+  for (const block of blocks) {
+    const text = block.map((i) => i.text).join(' ')
+    assert.match(text, /Dish/, 'each column keeps its dish names')
+    assert.match(text, /\d{3}/, 'each column keeps its prices')
+  }
+})
+
+test('one item spanning the page does not destroy the gutter', () => {
+  // A heading printed across both columns, or a dish name longer than its
+  // column, used to mark every bucket as covered and merge the two columns.
+  const items = [at('A Heading Across The Whole Page', 10, 760, 380, 16)]
+  for (let i = 0; i < 8; i += 1) {
+    const y = 700 - i * 20
+    items.push(at(`Left Dish ${i}`, 10, y, 50))
+    items.push(at(`${100 + i}`, 120, y, 20))
+    items.push(at(`Right Dish ${i}`, 220, y, 60))
+    items.push(at(`${200 + i}`, 330, y, 20))
+  }
+
+  const blocks = splitIntoBlocks(items, 400)
+  assert.strictEqual(blocks.length, 2, 'the spanning heading must not merge the columns')
+})
+
+test('a single-column page is still left alone', () => {
+  const items = []
+  for (let i = 0; i < 10; i += 1) {
+    const y = 700 - i * 20
+    items.push(at(`Dish ${i}`, 40, y, 60))
+    items.push(at(`${100 + i}`, 200, y, 20))
+  }
+
+  const blocks = splitIntoBlocks(items, 400)
+  assert.strictEqual(blocks.length, 1, 'nothing to split')
+})

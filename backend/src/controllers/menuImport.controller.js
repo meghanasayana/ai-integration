@@ -17,6 +17,9 @@ const prisma = require('../lib/prisma')
 const { extractMenuPlan, extractMenuPlanFromText } = require('../services/menuImport')
 const { importToDatabase } = require('../services/menuImport/importToDatabase')
 const { parsePrice } = require('../services/menuImport/price')
+const { importCombos } = require('../services/combos/importCombos')
+
+const MAX_ENTRIES_PER_IMPORT = 2000
 
 /** POST /api/restaurant/menu-import/extract */
 const extract = async (req, res) => {
@@ -43,7 +46,12 @@ const extract = async (req, res) => {
     })
   }
 
-  return res.json({ plan: result.plan, meta: result.meta, partial: result.partial })
+  return res.json({
+    plan: result.plan,
+    combos: result.combos ?? [],
+    meta: result.meta,
+    partial: result.partial,
+  })
 }
 
 /**
@@ -66,7 +74,12 @@ const extractText = async (req, res) => {
     })
   }
 
-  return res.json({ plan: result.plan, meta: result.meta, partial: result.partial })
+  return res.json({
+    plan: result.plan,
+    combos: result.combos ?? [],
+    meta: result.meta,
+    partial: result.partial,
+  })
 }
 
 /** POST /api/restaurant/menu-import/commit */
@@ -77,13 +90,27 @@ const commit = async (req, res) => {
     return res.status(403).json({ error: 'This account is not linked to a restaurant.' })
   }
 
-  const entries = Array.isArray(req.body.entries) ? req.body.entries : null
-  if (!entries || entries.length === 0) {
+  const entries = Array.isArray(req.body.entries) ? req.body.entries : []
+  const combos = Array.isArray(req.body.combos) ? req.body.combos : []
+
+  if (entries.length === 0 && combos.length === 0) {
     return res.status(400).json({ error: 'No entries were selected for import.' })
   }
 
-  if (entries.length > 500) {
-    return res.status(413).json({ error: 'Too many entries in one import.' })
+  if (combos.length > 100) {
+    return res.status(413).json({ error: 'Too many combos in one import.' })
+  }
+
+  // A guard against a runaway request, not a limit on real menus. The Taj
+  // menu alone parses to 655 dishes across 40 categories, so 500 refused an
+  // ordinary restaurant's whole card. The message says both numbers, because
+  // "too many" without a count tells the admin nothing about what to do.
+  if (entries.length > MAX_ENTRIES_PER_IMPORT) {
+    return res.status(413).json({
+      error:
+        `${entries.length} dishes in one import is more than this can take at once ` +
+        `(the limit is ${MAX_ENTRIES_PER_IMPORT}). Import them in two goes.`,
+    })
   }
 
   // Re-validate every entry server-side. The browser sent these back, so
@@ -98,9 +125,18 @@ const commit = async (req, res) => {
   }
 
   try {
-    const report = await importToDatabase({ prisma, restaurantId, entries: clean })
+    const report = clean.length > 0
+      ? await importToDatabase({ prisma, restaurantId, entries: clean })
+      : {
+          created: [], updated: [], unchanged: [], categoriesCreated: [],
+          portionsCreated: 0, portionsUpdated: 0,
+        }
+
+    const comboReport = await importCombos({ prisma, restaurantId, combos })
+
     return res.json({
       report,
+      comboReport,
       summary: {
         created: report.created.length,
         updated: report.updated.length,
@@ -108,6 +144,9 @@ const commit = async (req, res) => {
         categoriesCreated: report.categoriesCreated.length,
         portionsCreated: report.portionsCreated,
         portionsUpdated: report.portionsUpdated,
+        combosCreated: comboReport.created.length,
+        combosUpdated: comboReport.updated.length,
+        combosRejected: comboReport.rejected.length,
       },
     })
   } catch (err) {

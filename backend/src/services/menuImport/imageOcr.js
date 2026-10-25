@@ -175,6 +175,10 @@ async function extractImageRows(buffer, options = {}) {
 
   return {
     rows,
+    // The positioned words as well as the rows. Rows are enough for dishes,
+    // but a combo box is a two-dimensional thing and needs the coordinates.
+    items,
+    pageWidth,
     words: words.length,
     confidence: typeof page.confidence === 'number' ? page.confidence : null,
   }

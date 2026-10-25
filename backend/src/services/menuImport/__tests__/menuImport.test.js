@@ -287,10 +287,14 @@ test('supported menu file types are accepted', () => {
 test('unsupported, empty and oversized files are rejected with a reason', () => {
   assert.equal(classifyUpload({ mimetype: 'text/csv', size: 10 }).code, 'unsupported_type')
   assert.equal(classifyUpload({ mimetype: 'image/png', size: 0 }).code, 'empty_file')
+  // Measured against the real limit, not a number typed here: raising the cap
+  // should not mean editing a test to agree with it.
+  const { MAX_FILE_BYTES } = require('../fileSupport')
   assert.equal(
-    classifyUpload({ mimetype: 'image/png', size: 20 * 1024 * 1024 }).code,
+    classifyUpload({ mimetype: 'image/png', size: MAX_FILE_BYTES + 1 }).code,
     'too_large',
   )
+  assert.equal(classifyUpload({ mimetype: 'application/pdf', size: MAX_FILE_BYTES }).kind, 'pdf')
   assert.equal(classifyUpload({ size: 10 }).code, 'unknown_type')
 })
 

@@ -463,3 +463,76 @@ test('the restaurant name is not imported as a dish', () => {
   assert.equal(find(result, 'Chicken 65').item.price, '190')
   assert.ok(!result.categories.some((c) => c.items.some((i) => /ANBUDE/i.test(i.name))))
 })
+
+/* ---- sizes printed inside the dish name, as "(F/H/Q)" ---- */
+
+const { labelsFromName } = require('../portion')
+
+test('F/H/Q in the name becomes Full, Half and Quarter', () => {
+  const found = labelsFromName('Piri Piri Tandoori Chi. (F/H/Q)')
+  assert.deepStrictEqual(found, {
+    base: 'Piri Piri Tandoori Chi.',
+    labels: ['Full', 'Half', 'Quarter'],
+  })
+})
+
+test('written-out sizes in the name work too', () => {
+  assert.deepStrictEqual(labelsFromName('Rice (Full/Half)').labels, ['Full', 'Half'])
+  assert.deepStrictEqual(labelsFromName('Soup (S/M/L)').labels, ['Small', 'Medium', 'Large'])
+})
+
+test('brackets that are not sizes are left alone', () => {
+  // Bone and boneless, not Big and Large.
+  assert.strictEqual(labelsFromName('Chicken (B/L)'), null)
+  assert.strictEqual(labelsFromName('Chicken 65 (bone)'), null)
+  assert.strictEqual(labelsFromName('Gobi 65 (5 Pcs)'), null)
+  assert.strictEqual(labelsFromName('Plain Dish'), null)
+})
+
+test('the same size twice is a misread, not a menu', () => {
+  assert.strictEqual(labelsFromName('Thing (F/F)'), null)
+})
+
+test('a name that is only sizes is not a dish', () => {
+  assert.strictEqual(labelsFromName('(F/H/Q)'), null)
+})
+
+test('a dish with sizes in its name is imported with portions, not an ambiguous price', () => {
+  const result = parseRows([
+    ['Special Dish'],
+    ['Piri Piri Tandoori Chi. (F/H/Q)', '510/300/200'],
+  ])
+
+  const item = result.categories[0].items[0]
+  assert.strictEqual(item.name, 'Piri Piri Tandoori Chi.')
+  // Prices are strings all the way through this parser; the database layer
+  // converts them. Portions follow the same rule as every other price here.
+  assert.deepStrictEqual(item.portions, [
+    { label: 'Full', price: '510' },
+    { label: 'Half', price: '300' },
+    { label: 'Quarter', price: '200' },
+  ])
+  assert.strictEqual(result.stats.ambiguous, 0)
+})
+
+test('a single size in the name stays part of the name', () => {
+  // With three prices the brackets describe three columns and come off.
+  // With one price "(Q)" is what the dish IS - a quarter chicken - and the
+  // menu says so on purpose. Stripping it would lose what the diner ordered.
+  const result = parseRows([
+    ['Special Dish'],
+    ['Corindar Chicken (Q)', '190'],
+  ])
+  const item = result.categories[0].items[0]
+  assert.strictEqual(item.name, 'Corindar Chicken (Q)')
+  assert.strictEqual(item.price, '190')
+})
+
+test('sizes that do not match the number of prices are still flagged', () => {
+  // Two labels, three prices: something was misread, so do not place them.
+  const result = parseRows([
+    ['Special Dish'],
+    ['Something (F/H)', '510/300/200'],
+  ])
+  assert.strictEqual(result.stats.ambiguous, 1)
+})

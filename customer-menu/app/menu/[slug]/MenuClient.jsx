@@ -6,6 +6,7 @@ import MenuHero from '../../../components/MenuHero';
 import { DietaryFilters } from '../../../components/SearchBar';
 import CategoryRail from '../../../components/CategoryRail';
 import DishCard from '../../../components/DishCard';
+import ComboCard from '../../../components/ComboCard';
 import DishSheet from '../../../components/DishSheet';
 import ReviewSection from '../../../components/ReviewSection';
 import Footer from '../../../components/Footer';
@@ -58,6 +59,7 @@ export default function MenuClient({ params }) {
   const [state, setState] = useState('loading');
   const [restaurant, setRestaurant] = useState(null);
   const [categoryGroups, setCategoryGroups] = useState([]);
+  const [combos, setCombos] = useState([]);
   const [activeCategory, setActiveCategory] = useState('all');
   const [selectedItem, setSelectedItem] = useState(null);
   const [selectedAngle, setSelectedAngle] = useState('front');
@@ -144,6 +146,7 @@ export default function MenuClient({ params }) {
 
       const groups = groupItemsByCategory(items, data.categories || []);
       setCategoryGroups(groups);
+      setCombos(Array.isArray(data.combos) ? data.combos : []);
       setState('ready');
     } catch (err) {
       try {
@@ -162,6 +165,7 @@ export default function MenuClient({ params }) {
         }
         const groups = groupItemsByCategory(items, data.categories || []);
         setCategoryGroups(groups);
+        setCombos(Array.isArray(data.combos) ? data.combos : []);
         setState('ready');
       } catch (fallbackErr) {
         setState('error');
@@ -303,6 +307,26 @@ export default function MenuClient({ params }) {
 
   const resultCount = filteredGroups.reduce((total, group) => total + group.items.length, 0);
 
+  /**
+   * Combos shown for the current search.
+   *
+   * A combo matches on its name or on anything inside it, so searching
+   * "biryani" finds the combos that contain one as well as the dish itself.
+   * With no search, every combo is shown.
+   */
+  const visibleCombos = useMemo(() => {
+    const available = combos.filter((combo) => combo.isAvailable !== false);
+    const query = debouncedSearch.trim().toLowerCase();
+    if (!query) return available;
+
+    return available.filter((combo) => {
+      if (combo.name?.toLowerCase().includes(query)) return true;
+      return (combo.lines || []).some((line) =>
+        (line.options || []).some((option) => option.toLowerCase().includes(query)),
+      );
+    });
+  }, [combos, debouncedSearch]);
+
   const allCategories = categoryGroups.map((g) => ({ id: g.id, name: g.name }));
   let cardIndex = 0;
 
@@ -380,6 +404,30 @@ export default function MenuClient({ params }) {
 
       {/* ════ 5. DISH GRID MAIN SECTION ════ */}
       <main className="relative pb-24 pt-4">
+        {/* Combos sit above the categories, the way the printed menu gives
+            them their own page. A search hides the ones it does not match
+            rather than leaving them there looking like results. */}
+        {visibleCombos.length > 0 && (
+          <section className="scroll-mt-24 mb-8">
+            <div className="mx-auto max-w-[1240px] px-5 py-3 flex items-center justify-between border-b border-white/[0.08] mb-3">
+              <div className="flex items-center gap-3">
+                <h3 className="font-display text-xl sm:text-2xl text-[#f6f2eb] font-semibold tracking-wide">
+                  Combos
+                </h3>
+                <span className="text-[10px] tracking-widest text-[#d4b15d] font-bold uppercase border border-[#d4b15d]/40 px-2 py-0.5 rounded">
+                  {visibleCombos.length} {visibleCombos.length === 1 ? 'COMBO' : 'COMBOS'}
+                </span>
+              </div>
+            </div>
+
+            <div className="mx-auto max-w-[1240px] px-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {visibleCombos.map((combo) => (
+                <ComboCard key={combo.id || combo.name} combo={combo} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {filteredGroups.length === 0 ? (
           <div className="mx-auto max-w-[800px] px-4 py-16">
             <EmptyState variant="search" onReset={handleClearAll} />

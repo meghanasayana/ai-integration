@@ -26,6 +26,12 @@ const getMenu = async (req, res) => {
           },
           orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
         },
+        combos: {
+          include: {
+            lines: { orderBy: { sortOrder: 'asc' } },
+          },
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        },
       },
     })
   } catch (dbErr) {
@@ -71,6 +77,7 @@ const getMenu = async (req, res) => {
     },
     categories: restaurant.categories,
     foodItems: restaurant.foodItems,
+    combos: restaurant.combos ?? [],
   })
 }
 
