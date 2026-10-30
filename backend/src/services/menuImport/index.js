@@ -30,7 +30,7 @@ const { extractFromImage, extractFromText, extractFromRows, OllamaError } = requ
 const { validateAiOutput } = require('./validateAiOutput')
 const { buildImportPlan } = require('./buildImportPlan')
 const { mergeCategories } = require('./mergePages')
-const { verifyCoverage, rowsNotRepresented } = require('./verifyCoverage')
+const { verifyCoverage, rowsNotRepresented, dropInvented } = require('./verifyCoverage')
 const { parseRows, splitNameAndPrices } = require('./parseRows')
 const { extractImageRows, OcrError } = require('./imageOcr')
 const { extractCombosFromPdf, combosFromItems, asPlan: combosAsPlan } = require('./comboExtract')
@@ -156,9 +156,28 @@ async function readLeftovers(unparsed, allRows, options) {
       continue
     }
 
-    collected.push(validated.categories)
+    // The model may re-read the rows it was given and nothing else. Asked
+    // about rows it cannot parse, a small model writes a plausible dish
+    // rather than admitting defeat: a cafe menu came back with a "Chicken
+    // Biryani" priced "400220140", neither of which was on the page.
+    const checked = dropInvented(validated.categories, batch)
+    if (checked.invented.length > 0) {
+      console.warn(
+        `[menuImport] dropped ${checked.invented.length} dish(es) the model invented: ` +
+          checked.invented.map((d) => `"${d.name}" (${d.price})`).join(', '),
+      )
+      failures.push({
+        code: 'invented_dishes',
+        message:
+          `${checked.invented.length} dish(es) the AI returned were not on the page ` +
+          'and were discarded.',
+        rows: checked.invented.map((d) => `${d.name}\t${d.price}`),
+      })
+    }
 
-    const coverage = verifyCoverage(batch, validated.categories)
+    collected.push(checked.categories)
+
+    const coverage = verifyCoverage(batch, checked.categories)
     if (coverage.missingRows.length > 0) {
       failures.push({
         code: 'rows_not_returned',

@@ -81,11 +81,20 @@ function planItem(item, categoryName) {
   } else {
     // Blocking: FoodItem.price is NOT NULL, so a priceless dish cannot be
     // imported at all. Caught by a test that expected 'review' and got 'ready'.
-    warnings.push({
-      code: 'no_price',
-      message: 'No price could be read for this dish.',
-      blocking: true,
-    })
+    // A dish the menu prices seasonally says so where the price would be:
+    // "Cream Lobster  Seasonal". Telling the admin that nothing could be read
+    // would be wrong - the menu was read correctly and simply names no price.
+    warnings.push(item.priceOnRequest
+      ? {
+          code: 'price_on_request',
+          message: 'The menu prices this seasonally rather than naming a price. Set one to import it.',
+          blocking: true,
+        }
+      : {
+          code: 'no_price',
+          message: 'No price could be read for this dish.',
+          blocking: true,
+        })
   }
 
   if (warnings.some((w) => w.blocking)) entry.status = REVIEW

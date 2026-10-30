@@ -46,7 +46,15 @@ const COLUMN_GAP_RATIO = 0.8
 const SCAN_BUCKET = 2
 
 /** Narrowest vertical whitespace band treated as a possible section divider. */
-const MIN_GUTTER_POINTS = 18
+// The narrowest gutter worth believing, whatever the type size. Below this
+// a gap is a wide word space, not a column divide.
+const MIN_GUTTER_FLOOR = 10
+
+// A gutter is wide relative to the type around it, not to a fixed number of
+// points. A flat 18pt floor rejected a Tamil Nadu menu set in 8.5pt with a
+// 6mm gutter - 17pt of clean whitespace - so its two columns were never
+// separated and a third of the dishes came back as unreadable double rows.
+const GUTTER_LINE_HEIGHTS = 1.5
 
 /** Blocks at least this tall are held to the words-and-numbers check. */
 const SUBSTANTIAL_BLOCK_ROWS = 5
@@ -192,10 +200,26 @@ function splitIntoBands (items) {
   if (items.length === 0) return [items]
 
   const lineHeight = median(items.map((i) => i.height)) || 10
-  // A gap has to be clearly bigger than the space between two lines of a list.
-  const minGap = lineHeight * 2.2
-
   const sorted = items.slice().sort((a, b) => b.y - a.y)
+
+  // Measure the page's own vertical rhythm before cutting it up.
+  //
+  // Three gaps live on a menu page: between two lines of a list, between a
+  // section heading and its first dish, and between two separate boxes. A
+  // fixed multiple of the line height cannot tell the second from the third.
+  // On the cafe menu the line gap is 17pt and the heading gap only 23pt, so
+  // 2.2 x line height (19.8pt) cut every heading away from its own dishes
+  // and the eggs were filed under "BOWLS". Comparing against the typical gap
+  // on the page separates them: the box gap there is 175pt.
+  const gaps = []
+  let previous = sorted[0].y
+  for (const item of sorted) {
+    const gap = previous - item.y
+    if (gap > 0.5) gaps.push(gap)
+    if (item.y < previous) previous = item.y
+  }
+  const typicalGap = median(gaps) || lineHeight
+  const minGap = Math.max(lineHeight * 2.2, typicalGap * 2)
 
   const bands = []
   let current = [sorted[0]]
@@ -212,16 +236,27 @@ function splitIntoBands (items) {
   }
   if (current.length > 0) bands.push(current)
 
-  // A band holding a line or two is a heading that happens to sit alone; it
-  // belongs with what follows rather than being a region of its own.
+  // A band holding a single line of text is a page title or a stray note,
+  // never a box of its own. It belongs with what FOLLOWS, because a heading
+  // names the list under it. Merging it upwards instead stranded every
+  // category name. Counting lines rather than items matters: a row of two
+  // headings side by side is six or seven words but still one line.
+  const lineCount = (band) => new Set(band.map((i) => Math.round(i.y))).size
   const merged = []
+  let carry = []
+
   for (const band of bands) {
-    const previous = merged[merged.length - 1]
-    if (previous && band.length < 3) {
-      for (const item of band) previous.push(item)
-    } else {
-      merged.push(band)
+    if (lineCount(band) < 2) {
+      carry = carry.concat(band)
+      continue
     }
+    merged.push(carry.length > 0 ? carry.concat(band) : band)
+    carry = []
+  }
+
+  if (carry.length > 0) {
+    if (merged.length > 0) merged[merged.length - 1].push(...carry)
+    else merged.push(carry)
   }
 
   return merged.length > 0 ? merged : [items]
@@ -275,6 +310,9 @@ function findGutters (items, pageWidth) {
   const buckets = Math.max(1, Math.ceil(pageWidth / SCAN_BUCKET))
   const crossings = new Array(buckets).fill(0)
 
+  const lineHeight = median(items.map((i) => i.height)) || 10
+  const minGutter = Math.max(MIN_GUTTER_FLOOR, lineHeight * GUTTER_LINE_HEIGHTS)
+
   for (const item of items) {
     const width = item.width != null ? item.width : item.text.length * item.height * 0.5
     const from = Math.max(0, Math.floor(item.x / SCAN_BUCKET))
@@ -300,7 +338,7 @@ function findGutters (items, pageWidth) {
       const from = runStart * SCAN_BUCKET
       const to = i * SCAN_BUCKET
       // Ignore the page margins: only interior whitespace divides sections.
-      if (runStart > 0 && i < buckets && to - from >= MIN_GUTTER_POINTS) {
+      if (runStart > 0 && i < buckets && to - from >= minGutter) {
         gutters.push({ from, to, width: to - from, centre: (from + to) / 2 })
       }
       runStart = null

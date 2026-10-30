@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import MenuImportDialog from '@/components/MenuImportDialog';
 import MenuAssistantPanel from '@/components/MenuAssistantPanel';
+import DishDescriptionsPanel from '@/components/DishDescriptionsPanel';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import { cn } from '@/lib/utils';
@@ -369,6 +370,8 @@ export default function MenuPage() {
       </div>
 
       {/* Ask questions about the menu. Read-only: no question changes a dish. */}
+      <DishDescriptionsPanel onChanged={fetchItems} />
+
       <MenuAssistantPanel />
 
       {/* ── SEARCH & FILTER CONTROLS ── */}

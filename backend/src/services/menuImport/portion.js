@@ -15,10 +15,18 @@
 const CANONICAL = {
   quarter: ['quarter', 'qtr', 'qrt', '1/4', '¼', 'quarter plate', '1/4 plate'],
   half: ['half', '1/2', '½', 'half plate', '1/2 plate', 'hlf'],
-  full: ['full', 'full plate', '1/1', 'whole', 'regular'],
+  full: ['full', 'full plate', '1/1', 'whole'],
   small: ['small', 's', 'sml', 'sm'],
   medium: ['medium', 'm', 'med', 'mid'],
   large: ['large', 'l', 'lrg', 'lg', 'big'],
+  // Regular and Special are a pair in their own right, not sizes. A menu
+  // printing \"Regular  Special\" over two price columns is naming two
+  // versions of the dish - a plain one and a loaded one - and the admin
+  // import screen has always offered them as the default pair for two
+  // unlabelled prices. Regular used to be read as Full, which left Special
+  // unrecognised and sent every dish in such a section to review.
+  regular: ['regular', 'reg', 'normal', 'plain'],
+  special: ['special', 'spl', 'spcl'],
 }
 
 // Built once: every alias -> canonical name.

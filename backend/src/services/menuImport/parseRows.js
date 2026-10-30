@@ -1,6 +1,7 @@
 'use strict'
 
 const { labelsFromName } = require('./portion')
+const { normaliseRows } = require('./rowShapes')
 
 const { editDistance } = require('./dishName')
 
@@ -29,7 +30,12 @@ const { editDistance } = require('./dishName')
 
 /** Words that label a price column rather than name a dish. */
 const PORTION_WORDS = new Set([
-  'quarter', 'qtr', 'half', 'full', 'small', 'medium', 'large', 'regular',
+  'quarter', 'qtr', 'half', 'full', 'small', 'medium', 'large',
+  // Regular and Special are the two columns an Indian menu prints most often
+  // after Half and Full. Without 'special' the label row "Regular  Special"
+  // was read as a section heading and every dish under it went to review
+  // with two prices nobody had labelled.
+  'regular', 'reg', 'special', 'spl',
   'mini', 'jumbo', 'single', 'double', 'dry', 'gravy', 'chicken', 'mutton',
   'veg', 'paneer', 'egg', 'prawn', 'fish', 'plate', 'pc', 'pcs', 'piece', 'pieces',
 ])
@@ -260,6 +266,24 @@ function portionLabelsOf(cells) {
   return labels.length > 0 ? labels : null
 }
 
+// What a menu prints where a price would go when the price changes: lobster
+// and whole fish are sold at whatever the catch cost that morning.
+const PRICE_ON_REQUEST = /^(?:seasonal|seasonal rates?|as per (?:market|season)|market (?:price|rate)s?|on request|price on request|por|sq|aps|daily rates?)\.?$/i
+
+/** Is this cell standing in for a price the menu does not fix? */
+function isPriceOnRequest(cell) {
+  return PRICE_ON_REQUEST.test(String(cell).trim())
+}
+
+// A heading that says when the section is served: "Tiffin (6 am to 11 am)",
+// "Lunch 12 PM to 3 PM". Such a heading has digits in it, and a heading with
+// digits used to be thrown away as unreadable - which filed ten tiffin dishes
+// under the restaurant's own name, the only other line above them.
+//
+// A clock time is the whole test. It is not enough that the cell has digits:
+// "Idly (2 Pcs)" has digits too and is a dish, not a section.
+const OPENING_HOURS = /\b(?:a\.?m\.?|p\.?m\.?|noon|midnight)\b/i
+
 function hasDigit(cell) {
   return /\d/.test(String(cell))
 }
@@ -348,6 +372,7 @@ function parseRows(rows) {
   let currentCategory = null
   let portionLabels = []
   let ambiguous = 0
+  let assumedLabels = 0
   let orphanPrices = 0
 
   const addItem = (item) => {
@@ -405,7 +430,14 @@ function parseRows(rows) {
       // "(Non-Veg)" carries no punctuation clue at all, and neither does
       // "Special Non-Veg" then "Starters" - but a section that collected
       // nothing before the next heading arrived was never a section.
-      const joinable = !headingJoined && `${previous} ${text}`.length <= MAX_HEADING_CHARS
+      // A heading split over two lines is set the same way on both: "Rice (
+      // Non - Veg /" then "Noodles)". A page subtitle is not - "biriyani,
+      // kari and kuzhambu" in lower case sat above "BIRIYANI" in capitals and
+      // was glued onto it, naming the category after the strapline.
+      const shouts = (value) => value === value.toUpperCase() && /[A-Z]/.test(value)
+      const sameStyle = shouts(previous) === shouts(text)
+      const joinable =
+        !headingJoined && sameStyle && `${previous} ${text}`.length <= MAX_HEADING_CHARS
       if (joinable && (empty || looksUnfinished(previous) || looksLikeContinuation(text))) {
         const joined = `${previous} ${text}`.replace(/\s*\/\s*/g, ' / ').replace(/\s{2,}/g, ' ').trim()
         // Rename in place so dishes already filed under the partial name follow.
@@ -425,9 +457,21 @@ function parseRows(rows) {
     currentCategory = text
     headingJoined = false
     portionLabels = []
+
+    // Sizes printed in the heading belong to every dish under it.
+    // "COLD & SPARKLING (S/L)" above "Iced Latte  180/220" means small and
+    // large, and without this the pair goes to review as two prices nobody
+    // can explain. Two or more sizes are required: a lone "(Full)" on a
+    // heading is a note, not a portion scheme. The suffix is dropped from
+    // the category name once it has been read.
+    const headingSizes = labelsFromName(text)
+    if (headingSizes && headingSizes.labels.length >= 2) {
+      currentCategory = headingSizes.base
+      portionLabels = headingSizes.labels
+    }
   }
 
-  for (const row of rows || []) {
+  for (const row of normaliseRows(rows || [])) {
     if (!Array.isArray(row) || row.length === 0) continue
 
     const cells = row.map((c) => String(c).trim()).filter((c) => c !== '')
@@ -447,7 +491,11 @@ function parseRows(rows) {
     // decorative text printed sideways down the page, which repeats a word of
     // the current heading in capitals. Treating "BIRYANI" as a new section
     // would file the Clay Pot dishes under a heading the menu never prints.
-    if (cells.length === 1 && !hasDigit(cells[0]) && looksLikeName(cells[0])) {
+    if (
+      cells.length === 1 &&
+      looksLikeName(cells[0]) &&
+      (!hasDigit(cells[0]) || OPENING_HOURS.test(cells[0]))
+    ) {
       if (!isDecorativeEcho(cells[0], currentCategory)) setCategory(cells[0])
       continue
     }
@@ -566,6 +614,16 @@ function parseRows(rows) {
 
     const priced = values.filter((v) => v.price)
 
+    // "Cream Lobster  Seasonal" is a dish, not an unreadable row. Seven of
+    // them were dropped without a word because the price column held a word
+    // instead of a number. The dish is kept with no price, and the review
+    // step asks for one - a dish nobody can see is worse than a dish nobody
+    // has priced yet.
+    if (name && priced.length === 0 && cells.length > 1 && isPriceOnRequest(cells[cells.length - 1])) {
+      addItem({ name, price: null, priceOnRequest: true })
+      continue
+    }
+
     if (!name || priced.length === 0) {
       // A row that offered something in a price column, or that carries digits,
       // was meant to be a dish. A bare tagline was not, and is simply skipped.
@@ -621,6 +679,29 @@ function parseRows(rows) {
       continue
     }
 
+    // Two prices and no label printed anywhere on the page. On these menus
+    // that pair is a plain version of the dish and a loaded one - Regular and
+    // Special - which is what the live site's Dish Classification calls them
+    // and what the admin import screen has always offered as the default. The
+    // printed order is kept: the menu lists the cheaper one first.
+    //
+    // This is the one place the parser assumes rather than reads, and it is
+    // assumed deliberately. The count is reported as assumedLabels so it is
+    // never mistaken for something the menu actually said. Three or more
+    // unlabelled prices are NOT assumed - Quarter/Half/Full is a guess too far
+    // - and still go to review.
+    if (priced.length === 2) {
+      assumedLabels += 1
+      addItem({
+        name,
+        portions: [
+          { label: 'Regular', price: priced[0].price },
+          { label: 'Special', price: priced[1].price },
+        ],
+      })
+      continue
+    }
+
     // No usable labels. Hand back exactly what was printed, so the review step
     // flags it rather than this parser deciding what "150 / 170" means.
     ambiguous += 1
@@ -632,7 +713,14 @@ function parseRows(rows) {
   return {
     categories,
     unparsed,
-    stats: { dishes, categories: categories.length, ambiguous, orphanPrices, unparsed: unparsed.length },
+    stats: {
+      dishes,
+      categories: categories.length,
+      ambiguous,
+      assumedLabels,
+      orphanPrices,
+      unparsed: unparsed.length,
+    },
   }
 }
 

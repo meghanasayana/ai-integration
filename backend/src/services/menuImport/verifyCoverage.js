@@ -136,7 +136,99 @@ function rowsNotRepresented(rows, categories) {
   })
 }
 
+
+/* ------------------------------------------------------------------------ *
+ * Dishes the model made up.
+ *
+ * verifyCoverage above asks whether every row came back. This asks the
+ * opposite and more dangerous question: did something come back that was
+ * never there?
+ *
+ * Given rows it cannot make sense of, a small model does not say so - it
+ * writes a plausible dish. A cafe menu of espresso and sandwiches came back
+ * with "Chicken Biryani" at "400220140", a dish and a price that appear
+ * nowhere on the page, sitting in the import list ready to be saved.
+ *
+ * So the model is allowed to re-read what it was shown and nothing else.
+ * Every word of a dish name, and every digit of its price, has to be on the
+ * page it was given.
+ * ------------------------------------------------------------------------ */
+
+const TINY_WORD = 3
+const NAME_OVERLAP = 0.6
+
+const wordsOf = (text) =>
+  String(text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((w) => w.length >= TINY_WORD)
+
+/** Every word and number printed on the rows the model was shown. */
+function sourceVocabulary(rows) {
+  const words = new Set()
+  const numbers = new Set()
+
+  for (const row of rows || []) {
+    const cells = Array.isArray(row) ? row : (row && row.cells) || []
+    for (const cell of cells) {
+      const text = String(cell ?? '')
+      for (const word of wordsOf(text)) words.add(word)
+      for (const number of text.match(/\d+/g) || []) numbers.add(number.replace(/^0+(?=\d)/, ''))
+    }
+  }
+
+  return { words, numbers }
+}
+
+/** Was this dish on the page, or did the model write it? */
+function dishWasOnThePage(item, vocabulary) {
+  const nameWords = wordsOf(item && item.name)
+  if (nameWords.length === 0) return false
+
+  const seen = nameWords.filter((w) => vocabulary.words.has(w)).length
+  if (seen / nameWords.length < NAME_OVERLAP) return false
+
+  // Every number in the price has to have been printed. This is what catches
+  // "400220140" - three real prices run together into one that is not.
+  const prices = []
+  if (item.price !== undefined && item.price !== null) prices.push(String(item.price))
+  for (const portion of item.portions || []) prices.push(String(portion.price))
+
+  for (const price of prices) {
+    for (const number of price.match(/\d+/g) || []) {
+      if (!vocabulary.numbers.has(number.replace(/^0+(?=\d)/, ''))) return false
+    }
+  }
+
+  return true
+}
+
+/**
+ * Keep only the dishes that were actually on the rows given to the model.
+ * @returns {{categories: object[], invented: object[]}}
+ */
+function dropInvented(categories, rows) {
+  const vocabulary = sourceVocabulary(rows)
+  const kept = []
+  const invented = []
+
+  for (const category of categories || []) {
+    const items = []
+    for (const item of category.items || []) {
+      if (dishWasOnThePage(item, vocabulary)) items.push(item)
+      else invented.push({ name: item && item.name, price: item && item.price })
+    }
+    if (items.length > 0) kept.push({ ...category, items })
+  }
+
+  return { categories: kept, invented }
+}
+
 module.exports = {
+  dropInvented,
+  sourceVocabulary,
+  dishWasOnThePage,
   verifyCoverage,
   rowsNotRepresented,
   missingRowsText,
